@@ -33,10 +33,8 @@ export default function Home() {
 
   return (
     <main className="relative min-h-screen">
-      {/* Particles always visible in background */}
       <ParticleField />
 
-      {/* State-based rendering */}
       {state === "hero" && <HeroSection onSearch={handleSearch} />}
 
       {state === "analyzing" && (
