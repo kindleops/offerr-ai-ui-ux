@@ -19,13 +19,12 @@ export function ParticleField() {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
     let animationFrameId: number
-    let particles: Particle[] = []
-    const particleCount = 80
+    const particles: Particle[] = []
+    const particleCount = 60
 
     const resize = () => {
       canvas.width = window.innerWidth
@@ -38,12 +37,12 @@ export function ParticleField() {
       particles.push({
         x: Math.random() * canvas.width,
         y: Math.random() * canvas.height,
-        vx: (Math.random() - 0.5) * 0.3,
-        vy: (Math.random() - 0.5) * 0.3 - 0.1,
-        size: Math.random() * 2 + 0.5,
-        opacity: Math.random() * 0.5 + 0.1,
+        vx: (Math.random() - 0.5) * 0.2,
+        vy: (Math.random() - 0.5) * 0.2 - 0.08,
+        size: Math.random() * 1.5 + 0.5,
+        opacity: Math.random() * 0.4 + 0.05,
         life: Math.random() * 1000,
-        maxLife: 800 + Math.random() * 400,
+        maxLife: 900 + Math.random() * 400,
       })
     }
 
@@ -59,7 +58,7 @@ export function ParticleField() {
           p.x = Math.random() * canvas.width
           p.y = canvas.height + 10
           p.life = 0
-          p.opacity = Math.random() * 0.5 + 0.1
+          p.opacity = Math.random() * 0.4 + 0.05
         }
 
         if (p.x < 0) p.x = canvas.width
@@ -70,44 +69,40 @@ export function ParticleField() {
         }
 
         const lifeFraction = p.life / p.maxLife
-        const alpha = lifeFraction < 0.1
-          ? lifeFraction * 10 * p.opacity
-          : lifeFraction > 0.9
-            ? (1 - lifeFraction) * 10 * p.opacity
-            : p.opacity
+        const alpha =
+          lifeFraction < 0.1
+            ? lifeFraction * 10 * p.opacity
+            : lifeFraction > 0.9
+              ? (1 - lifeFraction) * 10 * p.opacity
+              : p.opacity
 
         ctx.beginPath()
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2)
         ctx.fillStyle = `rgba(0, 229, 245, ${alpha})`
         ctx.fill()
 
-        // Glow effect
         ctx.beginPath()
-        ctx.arc(p.x, p.y, p.size * 3, 0, Math.PI * 2)
-        const gradient = ctx.createRadialGradient(
-          p.x, p.y, 0,
-          p.x, p.y, p.size * 3
-        )
-        gradient.addColorStop(0, `rgba(0, 229, 245, ${alpha * 0.3})`)
+        ctx.arc(p.x, p.y, p.size * 4, 0, Math.PI * 2)
+        const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 4)
+        gradient.addColorStop(0, `rgba(0, 229, 245, ${alpha * 0.2})`)
         gradient.addColorStop(1, "rgba(0, 229, 245, 0)")
         ctx.fillStyle = gradient
         ctx.fill()
       })
 
-      // Draw connections
       for (let i = 0; i < particles.length; i++) {
         for (let j = i + 1; j < particles.length; j++) {
           const dx = particles[i].x - particles[j].x
           const dy = particles[i].y - particles[j].y
           const dist = Math.sqrt(dx * dx + dy * dy)
 
-          if (dist < 120) {
-            const alpha = (1 - dist / 120) * 0.08
+          if (dist < 150) {
+            const alpha = (1 - dist / 150) * 0.06
             ctx.beginPath()
             ctx.moveTo(particles[i].x, particles[i].y)
             ctx.lineTo(particles[j].x, particles[j].y)
             ctx.strokeStyle = `rgba(0, 229, 245, ${alpha})`
-            ctx.lineWidth = 0.5
+            ctx.lineWidth = 0.4
             ctx.stroke()
           }
         }
