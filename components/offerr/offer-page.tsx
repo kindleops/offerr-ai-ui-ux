@@ -2,81 +2,50 @@
 
 import { useState, useEffect, useRef } from "react"
 import { NeonProgress } from "./neon-progress"
-import {
-  TrendingUp,
-  MapPin,
-  Home,
-  DollarSign,
-  BarChart3,
-  Clock,
-  ArrowRight,
-  ChevronDown,
-  ChevronUp,
-} from "lucide-react"
+import { TrendingUp, MapPin, Home, DollarSign, BarChart3, Clock, ArrowRight, Brain } from "lucide-react"
 
-interface OfferPageProps {
-  address: string
-  onGenerateContract: () => void
-}
+interface OfferPageProps { address: string; onGenerateContract: () => void }
 
-/* ───── Animated Number ───── */
-
-function AnimatedNumber({
-  target,
-  duration = 2000,
-  prefix = "",
-  suffix = "",
-}: {
-  target: number
-  duration?: number
-  prefix?: string
-  suffix?: string
-}) {
+/* ───── Odometer Number ───── */
+function OdometerNumber({ target, duration = 2800, prefix = "" }: { target: number; duration?: number; prefix?: string }) {
   const [current, setCurrent] = useState(0)
-
   useEffect(() => {
     const start = performance.now()
     const animate = (now: number) => {
-      const elapsed = now - start
-      const progress = Math.min(elapsed / duration, 1)
-      const eased = 1 - Math.pow(1 - progress, 3)
+      const p = Math.min((now - start) / duration, 1)
+      const eased = 1 - Math.pow(1 - p, 4)
       setCurrent(Math.round(eased * target))
-      if (progress < 1) requestAnimationFrame(animate)
+      if (p < 1) requestAnimationFrame(animate)
     }
     requestAnimationFrame(animate)
   }, [target, duration])
 
+  const formatted = current.toLocaleString()
   return (
-    <span>
-      {prefix}
-      {current.toLocaleString()}
-      {suffix}
+    <span className="inline-flex items-baseline">
+      {prefix && <span>{prefix}</span>}
+      {formatted.split("").map((char, i) => (
+        <span key={`${i}-${char}`} className="inline-block" style={{ animation: `odometer-digit 0.3s ease-out ${i * 0.04}s both` }}>
+          {char}
+        </span>
+      ))}
     </span>
   )
 }
 
-/* ───── Circular Confidence Ring ───── */
-
-function ConfidenceRing({
-  value,
-  size = 140,
-}: {
-  value: number
-  size?: number
-}) {
+/* ───── Confidence Ring with Computation Arcs ───── */
+function ConfidenceRing({ value, size = 150 }: { value: number; size?: number }) {
   const [current, setCurrent] = useState(0)
-  const strokeWidth = 6
-  const radius = (size - strokeWidth) / 2
-  const circumference = 2 * Math.PI * radius
+  const strokeWidth = 5
+  const r = (size - strokeWidth * 2) / 2
+  const circumference = 2 * Math.PI * r
 
   useEffect(() => {
     const start = performance.now()
     const animate = (now: number) => {
-      const elapsed = now - start
-      const progress = Math.min(elapsed / 2500, 1)
-      const eased = 1 - Math.pow(1 - progress, 3)
-      setCurrent(eased * value)
-      if (progress < 1) requestAnimationFrame(animate)
+      const p = Math.min((now - start) / 2500, 1)
+      setCurrent((1 - Math.pow(1 - p, 3)) * value)
+      if (p < 1) requestAnimationFrame(animate)
     }
     requestAnimationFrame(animate)
   }, [value])
@@ -85,227 +54,150 @@ function ConfidenceRing({
 
   return (
     <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
+      {/* Outer computation ring */}
+      <svg width={size} height={size} className="absolute animate-ring-spin" style={{ animationDuration: "30s" }}>
+        <circle cx={size / 2} cy={size / 2} r={r + 12} fill="none" stroke="rgba(0,228,255,0.04)" strokeWidth={0.5} strokeDasharray="3 8" />
+      </svg>
+      <svg width={size} height={size} className="absolute" style={{ animation: "ring-spin 25s linear infinite reverse" }}>
+        <circle cx={size / 2} cy={size / 2} r={r + 8} fill="none" stroke="rgba(0,228,255,0.03)" strokeWidth={0.5} strokeDasharray="5 12" />
+      </svg>
+      {/* Main ring */}
       <svg width={size} height={size} className="-rotate-90">
-        {/* Track */}
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="rgba(0, 229, 245, 0.08)"
-          strokeWidth={strokeWidth}
-        />
-        {/* Progress */}
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="url(#neonGradient)"
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          style={{ transition: "stroke-dashoffset 0.1s ease", filter: "drop-shadow(0 0 6px rgba(0, 229, 245, 0.4))" }}
-        />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(0,228,255,0.06)" strokeWidth={strokeWidth} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="url(#neonG)" strokeWidth={strokeWidth}
+          strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset}
+          style={{ transition: "stroke-dashoffset 0.1s ease", filter: "drop-shadow(0 0 8px rgba(0,228,255,0.35))" }} />
         <defs>
-          <linearGradient id="neonGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#00B8C5" />
-            <stop offset="100%" stopColor="#00E5F5" />
+          <linearGradient id="neonG" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#00B8D4" /><stop offset="100%" stopColor="#00E4FF" />
           </linearGradient>
         </defs>
       </svg>
       <div className="absolute flex flex-col items-center">
-        <span className="font-display text-3xl font-bold neon-text">
-          {Math.round(current)}%
-        </span>
-        <span className="text-[9px] text-muted-foreground/50 font-sans uppercase tracking-wider mt-0.5">
-          Confidence
-        </span>
+        <span className="font-display text-3xl font-bold neon-text">{Math.round(current)}%</span>
+        <span className="text-[8px] text-[#6C7A89]/50 font-mono uppercase tracking-wider mt-0.5">AI Consensus</span>
       </div>
     </div>
   )
 }
 
-/* ───── Staggered Value Display ───── */
-
-function StaggeredValues({ items, visible }: { items: { label: string; value: string }[]; visible: boolean }) {
-  return (
-    <div className="flex items-center justify-center gap-6 md:gap-8">
-      {items.map((item, i) => (
-        <div
-          key={item.label}
-          className="text-center"
-          style={{
-            opacity: visible ? 1 : 0,
-            transform: visible ? "translateY(0)" : "translateY(12px)",
-            transition: `all 0.6s ease ${0.8 + i * 0.15}s`,
-          }}
-        >
-          <p className="text-[10px] text-muted-foreground/40 font-sans uppercase tracking-wider mb-1">
-            {item.label}
-          </p>
-          <p className="font-display font-semibold text-foreground text-sm md:text-base">
-            {item.value}
-          </p>
-        </div>
-      ))}
-    </div>
-  )
+/* ───── Market Sparkline (tiny inline chart) ───── */
+function Sparkline({ data, color = "#00E4FF" }: { data: number[]; color?: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const c = canvasRef.current; if (!c) return
+    const ctx = c.getContext("2d"); if (!ctx) return
+    const dpr = 2; c.width = c.offsetWidth * dpr; c.height = c.offsetHeight * dpr; ctx.scale(dpr, dpr)
+    const w = c.offsetWidth, h = c.offsetHeight
+    const max = Math.max(...data), min = Math.min(...data)
+    const range = max - min || 1
+    ctx.beginPath()
+    data.forEach((v, i) => {
+      const x = (i / (data.length - 1)) * w, y = h - ((v - min) / range) * h * 0.8 - h * 0.1
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
+    })
+    ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.stroke()
+    // Fill below
+    const last = data[data.length - 1]
+    ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath()
+    const g = ctx.createLinearGradient(0, 0, 0, h)
+    g.addColorStop(0, color.replace(")", ",0.15)").replace("rgb", "rgba")); g.addColorStop(1, "rgba(0,0,0,0)")
+    ctx.fillStyle = `${color}10`; ctx.fill()
+  }, [data, color])
+  return <canvas ref={canvasRef} className="w-full h-full" />
 }
 
-/* ───── Main Component ───── */
-
+/* ───── Main Offer Page ───── */
 export function OfferPage({ address, onGenerateContract }: OfferPageProps) {
-  const [visible, setVisible] = useState(false)
-  const [cardsVisible, setCardsVisible] = useState(false)
-  const [snapshotVisible, setSnapshotVisible] = useState(false)
-  const [ctaVisible, setCtaVisible] = useState(false)
+  const [v, setV] = useState(false)
+  const [cards, setCards] = useState(false)
+  const [snap, setSnap] = useState(false)
+  const [cta, setCta] = useState(false)
 
   useEffect(() => {
-    const t1 = setTimeout(() => setVisible(true), 200)
-    const t2 = setTimeout(() => setCardsVisible(true), 900)
-    const t3 = setTimeout(() => setSnapshotVisible(true), 1500)
-    const t4 = setTimeout(() => setCtaVisible(true), 2200)
-    return () => {
-      clearTimeout(t1)
-      clearTimeout(t2)
-      clearTimeout(t3)
-      clearTimeout(t4)
-    }
+    const t1 = setTimeout(() => setV(true), 200)
+    const t2 = setTimeout(() => setCards(true), 1000)
+    const t3 = setTimeout(() => setSnap(true), 1600)
+    const t4 = setTimeout(() => setCta(true), 2400)
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4) }
   }, [])
 
   const marketData = [
-    { label: "Median Sale Price", value: "$312,000", icon: DollarSign, change: "+4.2%" },
-    { label: "Avg Days on Market", value: "18 days", icon: Clock, change: "-12%" },
-    { label: "Price per Sq Ft", value: "$178", icon: Home, change: "+6.1%" },
-    { label: "Absorption Rate", value: "2.4 months", icon: BarChart3, change: "-8%" },
+    { label: "Median Sale Price", value: "$312,000", icon: DollarSign, change: "+4.2%", sparkData: [280, 290, 285, 295, 305, 310, 308, 312] },
+    { label: "Avg Days on Market", value: "18 days", icon: Clock, change: "-12%", sparkData: [32, 28, 25, 22, 20, 19, 18, 18] },
+    { label: "Price per Sq Ft", value: "$178", icon: Home, change: "+6.1%", sparkData: [155, 158, 162, 165, 170, 172, 175, 178] },
+    { label: "Absorption Rate", value: "2.4 months", icon: BarChart3, change: "-8%", sparkData: [3.5, 3.2, 3.0, 2.8, 2.7, 2.5, 2.4, 2.4] },
   ]
 
   return (
-    <div className="min-h-screen bg-[#060606] relative">
-      {/* Grid bg */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          backgroundImage: `
-            linear-gradient(rgba(0, 229, 245, 0.015) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(0, 229, 245, 0.015) 1px, transparent 1px)
-          `,
-          backgroundSize: "60px 60px",
-        }}
-        aria-hidden="true"
-      />
-
-      {/* Radial glow */}
-      <div
-        className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-[500px] pointer-events-none"
-        style={{
-          background:
-            "radial-gradient(ellipse at center top, rgba(0, 229, 245, 0.05) 0%, transparent 60%)",
-        }}
-        aria-hidden="true"
-      />
+    <div className="min-h-screen bg-[#04070A] relative">
+      <div className="absolute inset-0 pointer-events-none"
+        style={{ backgroundImage: `linear-gradient(rgba(0,228,255,0.012) 1px, transparent 1px), linear-gradient(90deg, rgba(0,228,255,0.012) 1px, transparent 1px)`, backgroundSize: "60px 60px" }}
+        aria-hidden="true" />
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-[500px] pointer-events-none"
+        style={{ background: "radial-gradient(ellipse at center top, rgba(0,228,255,0.04) 0%, transparent 55%)" }} aria-hidden="true" />
 
       <div className="relative max-w-2xl mx-auto px-4 py-10 md:py-16">
         {/* Header */}
-        <div
-          className="text-center mb-8"
-          style={{
-            opacity: visible ? 1 : 0,
-            transform: visible ? "translateY(0)" : "translateY(16px)",
-            transition: "all 0.8s ease",
-          }}
-        >
+        <div className="text-center mb-8" style={{ opacity: v ? 1 : 0, transform: v ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease" }}>
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass-card text-[10px] font-mono text-neon/70 mb-3 uppercase tracking-wider">
             <div className="w-1.5 h-1.5 rounded-full bg-neon animate-pulse" />
             AI Analysis Complete
           </div>
-          <h1 className="font-display text-3xl md:text-4xl font-bold text-foreground mb-2">
-            Your Cash Offer
-          </h1>
-          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground/60 font-mono">
-            <MapPin size={12} className="text-neon/40" />
-            <span>{address}</span>
+          <h1 className="font-display text-3xl md:text-4xl font-bold text-[#F8F9FA] mb-2">Your Cash Offer</h1>
+          <div className="flex items-center justify-center gap-2 text-xs text-[#6C7A89]/60 font-mono">
+            <MapPin size={12} className="text-neon/40" /><span>{address}</span>
           </div>
         </div>
 
         {/* Main offer card */}
-        <div
-          className="mb-8"
-          style={{
-            opacity: visible ? 1 : 0,
-            transform: visible ? "translateY(0) scale(1)" : "translateY(24px) scale(0.98)",
-            transition: "all 1s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s",
-          }}
-        >
+        <div className="mb-8" style={{ opacity: v ? 1 : 0, transform: v ? "translateY(0) scale(1)" : "translateY(24px) scale(0.98)", transition: "all 1s cubic-bezier(0.34,1.56,0.64,1) 0.2s" }}>
           <div className="glass-card-strong rounded-2xl p-6 md:p-8 relative overflow-hidden">
-            {/* Shimmer sweep */}
+            {/* Shimmer */}
             <div className="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
-              <div
-                className="absolute inset-y-0 w-1/3 animate-shimmer-sweep"
-                style={{
-                  background: "linear-gradient(90deg, transparent, rgba(0,229,245,0.03), transparent)",
-                }}
-              />
+              <div className="absolute inset-y-0 w-1/4 animate-shimmer-sweep"
+                style={{ background: "linear-gradient(90deg, transparent, rgba(0,228,255,0.025), transparent)" }} />
             </div>
 
             <div className="relative flex flex-col items-center">
-              <p className="text-[10px] font-mono uppercase tracking-[0.4em] text-muted-foreground/50 mb-5">
-                Estimated Cash Offer
-              </p>
+              <p className="text-[10px] font-mono uppercase tracking-[0.4em] text-[#6C7A89]/50 mb-5">Estimated Cash Offer</p>
 
-              {/* Glowing offer amount */}
+              {/* Glowing offer number with computation rings */}
               <div className="relative mb-5">
-                <div
-                  className="absolute -inset-6 rounded-xl pointer-events-none"
-                  style={{
-                    background: "radial-gradient(ellipse, rgba(0,229,245,0.08) 0%, transparent 70%)",
-                  }}
-                  aria-hidden="true"
-                />
+                <div className="absolute -inset-8 rounded-full pointer-events-none"
+                  style={{ background: "radial-gradient(ellipse, rgba(0,228,255,0.07) 0%, transparent 65%)" }} aria-hidden="true" />
                 <div className="font-display text-5xl md:text-7xl font-bold neon-text-strong relative">
-                  <AnimatedNumber target={287500} prefix="$" duration={2500} />
+                  <OdometerNumber target={287500} prefix="$" duration={3000} />
                 </div>
               </div>
 
-              {/* Low / Mid / High staggered */}
-              <StaggeredValues
-                visible={visible}
-                items={[
-                  { label: "Low", value: "$272,000" },
-                  { label: "Mid", value: "$287,500" },
-                  { label: "High", value: "$305,000" },
-                ]}
-              />
+              {/* Low/Mid/High staggered */}
+              <div className="flex items-center justify-center gap-6 md:gap-8 mb-6">
+                {[{ label: "Low", value: "$272,000" }, { label: "Mid", value: "$287,500" }, { label: "High", value: "$305,000" }].map((item, i) => (
+                  <div key={item.label} className="text-center"
+                    style={{ opacity: v ? 1 : 0, transform: v ? "translateY(0)" : "translateY(12px)", transition: `all 0.6s ease ${1 + i * 0.15}s` }}>
+                    <p className="text-[10px] text-[#6C7A89]/40 font-sans uppercase tracking-wider mb-1">{item.label}</p>
+                    <p className="font-display font-semibold text-[#F8F9FA] text-sm md:text-base">{item.value}</p>
+                  </div>
+                ))}
+              </div>
 
-              {/* Confidence ring */}
-              <div className="mt-6 mb-4">
+              {/* Confidence ring + AI badge */}
+              <div className="flex flex-col items-center gap-3">
                 <ConfidenceRing value={94} />
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-neon/[0.06] border border-neon/[0.12]">
+                  <Brain size={10} className="text-neon/60" />
+                  <span className="text-[9px] font-mono text-neon/50">AI Consensus: 94%</span>
+                </div>
               </div>
 
               {/* Quick stats */}
-              <div className="grid grid-cols-3 gap-4 w-full mt-4 pt-5 border-t border-[rgba(0,229,245,0.08)]">
-                {[
-                  { label: "ARV", value: "$345,000" },
-                  { label: "Est. Repairs", value: "$32,500" },
-                  { label: "Net Profit", value: "$25,000" },
-                ].map((stat, i) => (
-                  <div
-                    key={stat.label}
-                    className="text-center"
-                    style={{
-                      opacity: cardsVisible ? 1 : 0,
-                      transform: cardsVisible ? "translateY(0)" : "translateY(8px)",
-                      transition: `all 0.5s ease ${i * 0.1}s`,
-                    }}
-                  >
-                    <p className="text-[9px] text-muted-foreground/40 font-mono uppercase tracking-wider mb-1">
-                      {stat.label}
-                    </p>
-                    <p className="font-display font-semibold text-foreground text-sm">
-                      {stat.value}
-                    </p>
+              <div className="grid grid-cols-3 gap-4 w-full mt-6 pt-5 border-t border-[rgba(0,228,255,0.06)]">
+                {[{ label: "ARV", value: "$345,000" }, { label: "Est. Repairs", value: "$32,500" }, { label: "Net Profit", value: "$25,000" }].map((s, i) => (
+                  <div key={s.label} className="text-center"
+                    style={{ opacity: cards ? 1 : 0, transform: cards ? "translateY(0)" : "translateY(8px)", transition: `all 0.5s ease ${i * 0.1}s` }}>
+                    <p className="text-[9px] text-[#6C7A89]/35 font-mono uppercase tracking-wider mb-1">{s.label}</p>
+                    <p className="font-display font-semibold text-[#F8F9FA] text-sm">{s.value}</p>
                   </div>
                 ))}
               </div>
@@ -313,103 +205,70 @@ export function OfferPage({ address, onGenerateContract }: OfferPageProps) {
           </div>
         </div>
 
-        {/* Market Snapshot */}
+        {/* Market Snapshot with sparklines */}
         <div className="mb-8">
-          <h2
-            className="font-display text-sm font-semibold text-foreground/80 mb-3 uppercase tracking-wider"
-            style={{
-              opacity: snapshotVisible ? 1 : 0,
-              transition: "opacity 0.6s ease",
-            }}
-          >
-            Market Snapshot
-          </h2>
+          <h2 className="font-display text-sm font-semibold text-[#F8F9FA]/80 mb-3 uppercase tracking-wider"
+            style={{ opacity: snap ? 1 : 0, transition: "opacity 0.6s ease" }}>Market Snapshot</h2>
           <div className="grid grid-cols-2 gap-3">
             {marketData.map((item, i) => (
-              <div
-                key={item.label}
-                className="glass-card-hover rounded-xl p-4"
-                style={{
-                  opacity: snapshotVisible ? 1 : 0,
-                  transform: snapshotVisible
-                    ? "translateX(0)"
-                    : `translateX(${i % 2 === 0 ? "-" : ""}24px)`,
-                  transition: `all 0.6s cubic-bezier(0.16, 1, 0.3, 1) ${i * 0.08}s`,
-                }}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <item.icon size={13} className="text-neon/50" />
-                  <span className="text-[10px] text-muted-foreground/50 font-sans">
-                    {item.label}
-                  </span>
+              <div key={item.label} className="glass-card-hover rounded-xl p-4 relative overflow-hidden"
+                style={{ opacity: snap ? 1 : 0, transform: snap ? "translateX(0)" : `translateX(${i % 2 === 0 ? "-" : ""}20px)`, transition: `all 0.6s cubic-bezier(0.16,1,0.3,1) ${i * 0.08}s` }}>
+                {/* Background sparkline */}
+                <div className="absolute bottom-0 left-0 right-0 h-10 opacity-30 pointer-events-none">
+                  <Sparkline data={item.sparkData} color={item.change.startsWith("+") ? "#14FFA1" : "#00E4FF"} />
                 </div>
-                <div className="font-display font-semibold text-foreground text-base">
-                  {item.value}
-                </div>
-                <div
-                  className={`text-[10px] mt-1 font-mono ${
-                    item.change.startsWith("+")
-                      ? "text-emerald-400/80"
-                      : "text-neon/50"
-                  }`}
-                >
-                  <TrendingUp size={9} className="inline mr-1" />
-                  {item.change}
+                <div className="relative">
+                  <div className="flex items-center gap-2 mb-2">
+                    <item.icon size={12} className="text-neon/45" />
+                    <span className="text-[10px] text-[#6C7A89]/45 font-sans">{item.label}</span>
+                  </div>
+                  <div className="font-display font-semibold text-[#F8F9FA] text-base">{item.value}</div>
+                  <div className={`text-[10px] mt-1 font-mono ${item.change.startsWith("+") ? "text-[#14FFA1]/70" : "text-neon/50"}`}>
+                    <TrendingUp size={9} className="inline mr-1" />{item.change} YoY
+                  </div>
                 </div>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Valuation Breakdown */}
-        <div
-          className="mb-10"
-          style={{
-            opacity: cardsVisible ? 1 : 0,
-            transform: cardsVisible ? "translateY(0)" : "translateY(16px)",
-            transition: "all 0.8s ease",
-          }}
-        >
-          <h2 className="font-display text-sm font-semibold text-foreground/80 mb-3 uppercase tracking-wider">
-            Valuation Breakdown
-          </h2>
+        {/* Valuation Breakdown with confidence tags */}
+        <div className="mb-10" style={{ opacity: cards ? 1 : 0, transform: cards ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease" }}>
+          <h2 className="font-display text-sm font-semibold text-[#F8F9FA]/80 mb-3 uppercase tracking-wider">Valuation Breakdown</h2>
           <div className="space-y-2.5">
             {[
-              { label: "Comparable Sales Analysis", value: 96 },
-              { label: "Location Score", value: 88 },
-              { label: "Market Trend Alignment", value: 91 },
-              { label: "Investment Viability", value: 85 },
-            ].map((metric, i) => (
-              <div key={metric.label} className="glass-card rounded-xl px-4 py-3.5">
-                <NeonProgress
-                  value={metric.value}
-                  duration={2000 + i * 300}
-                  label={metric.label}
-                />
+              { label: "Comparable Sales Analysis", value: 96, tag: "Strong" },
+              { label: "Location Score", value: 88, tag: "Strong" },
+              { label: "Market Trend Alignment", value: 91, tag: "Strong" },
+              { label: "Investment Viability", value: 85, tag: "Moderate" },
+            ].map((m, i) => (
+              <div key={m.label} className="glass-card rounded-xl px-4 py-3.5">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-sans uppercase tracking-widest text-[#6C7A89]">{m.label}</span>
+                  <span className={`text-[9px] font-mono px-2 py-0.5 rounded-full ${m.tag === "Strong" ? "bg-[#14FFA1]/8 text-[#14FFA1]/60 border border-[#14FFA1]/15" : "bg-neon/8 text-neon/50 border border-neon/15"}`}>{m.tag}</span>
+                </div>
+                <NeonProgress value={m.value} duration={2000 + i * 300} />
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Toggles */}
+        <div className="flex items-center justify-center gap-3 mb-8" style={{ opacity: cta ? 1 : 0, transition: "opacity 0.6s ease" }}>
+          {["View Formula Breakdown", "See Market Rationale"].map((label) => (
+            <button key={label} className="px-3 py-2 rounded-lg glass-card text-[10px] font-mono text-neon/50 hover:text-neon/70 hover:border-neon/20 transition-all duration-300 min-h-[36px]">
+              {label}
+            </button>
+          ))}
         </div>
 
         {/* CTA */}
-        <div
-          className="text-center"
-          style={{
-            opacity: ctaVisible ? 1 : 0,
-            transform: ctaVisible ? "translateY(0)" : "translateY(16px)",
-            transition: "all 0.8s ease",
-          }}
-        >
-          <button
-            onClick={onGenerateContract}
-            className="inline-flex items-center gap-3 px-8 py-4 rounded-xl font-display font-semibold text-base bg-neon text-[#0A0A0A] animate-breathe hover:shadow-[0_0_40px_rgba(0,229,245,0.5)] active:scale-[0.97] transition-all duration-300 min-h-[52px]"
-          >
-            Generate Contract
-            <ArrowRight size={18} />
+        <div className="text-center" style={{ opacity: cta ? 1 : 0, transform: cta ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease" }}>
+          <button onClick={onGenerateContract}
+            className="inline-flex items-center gap-3 px-8 py-4 rounded-xl font-display font-semibold text-base bg-neon text-[#04070A] animate-breathe hover:shadow-[0_0_45px_rgba(0,228,255,0.4)] active:scale-[0.97] transition-all duration-300 min-h-[52px]">
+            Generate Contract<ArrowRight size={18} />
           </button>
-          <p className="text-[10px] text-muted-foreground/30 mt-3 font-mono">
-            Powered by SignPro.ai
-          </p>
+          <p className="text-[10px] text-[#6C7A89]/25 mt-3 font-mono">Powered by SignPro.ai</p>
         </div>
       </div>
     </div>
