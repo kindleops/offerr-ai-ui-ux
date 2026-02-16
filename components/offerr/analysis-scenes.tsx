@@ -425,8 +425,7 @@ export function AnalysisScenes({ address, onComplete }: AnalysisScenesProps) {
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full pointer-events-none"
         style={{ background: "radial-gradient(circle, rgba(0,228,255,0.035) 0%, transparent 55%)" }} aria-hidden="true" />
 
-      <div className="flex flex-col items-center w-full max-w-md px-4"
-        style={{ opacity: sceneTransition ? 0 : 1, transform: sceneTransition ? "scale(0.97)" : "scale(1)", transition: "opacity 0.6s ease, transform 0.6s ease" }}>
+      <div className={`flex flex-col items-center w-full max-w-md px-4 transition-all duration-600 ease-out ${sceneTransition ? "opacity-0 scale-[0.97]" : "opacity-100 scale-100"}`}>
         {/* Step dots */}
         <div className="flex items-center gap-2 mb-6">
           {scenes.map((_, i) => (

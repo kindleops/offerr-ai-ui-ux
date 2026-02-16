@@ -62,8 +62,8 @@ function DataTimeline() {
             const show = i < vis; const open = exp === i; const Icon = ev.icon
             return (
               <button key={i} onClick={() => setExp(open ? null : i)}
-                className="relative flex items-start gap-3 py-2 w-full text-left group"
-                style={{ opacity: show ? 1 : 0.08, transform: show ? "translateX(0)" : "translateX(-6px)", transition: `all 0.35s ease ${i * 0.02}s` }}>
+                className={`relative flex items-start gap-3 py-2 w-full text-left group transition-all ${show ? "opacity-100 translate-x-0" : "opacity-[0.08] -translate-x-1.5"}`}
+                style={{ transitionDelay: `${i * 0.02}s` }}>
                 <div className={`relative z-10 w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-300 ${show ? "bg-neon/8 border border-neon/15" : "bg-muted/5"}`}>
                   <Icon size={11} className={show ? "text-neon" : "text-[#6C7A89]/20"} />
                 </div>
@@ -222,8 +222,8 @@ function CompsEngine() {
           const open = expComp === i
           return (
             <button key={comp.address} onClick={() => setExpComp(open ? null : i)}
-              className={`w-full text-left rounded-xl transition-all duration-400 ${open ? "glass-card-strong p-4" : "bg-neon/[0.015] hover:bg-neon/[0.03] p-3.5"}`}
-              style={{ opacity: vis ? 1 : 0, transform: vis ? "translateY(0)" : "translateY(8px)", transition: `all 0.5s ease ${i * 0.07}s` }}>
+              className={`w-full text-left rounded-xl transition-all duration-500 ${open ? "glass-card-strong p-4" : "bg-neon/[0.015] hover:bg-neon/[0.03] p-3.5"} ${vis ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"}`}
+              style={{ transitionDelay: `${i * 0.07}s` }}>
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
                   style={{ background: `rgba(0,228,255,${comp.similarity / 1200})`, border: `1px solid rgba(0,228,255,${comp.similarity / 600})` }}>
@@ -394,7 +394,7 @@ function InvestorMath() {
         <h2 className="font-display text-sm font-semibold text-[#F8F9FA] uppercase tracking-wider">Investor Math Engine</h2>
       </div>
       {/* Formula header */}
-      <div className="mb-4 px-3 py-2.5 rounded-lg bg-neon/[0.03] border border-neon/[0.08]" style={{ opacity: vis ? 1 : 0, transition: "opacity 0.8s ease" }}>
+      <div className={`mb-4 px-3 py-2.5 rounded-lg bg-neon/[0.03] border border-neon/[0.08] transition-opacity duration-700 ${vis ? "opacity-100" : "opacity-0"}`}>
         <p className="text-[10px] text-neon/50 font-mono text-center tracking-wider">
           {"(ARV x 0.70) - Repairs - Risk - Buffer - Hold = Final Offer"}
         </p>
@@ -402,8 +402,8 @@ function InvestorMath() {
 
       <div className="space-y-1.5">
         {steps.map((s, i) => (
-          <div key={s.label} className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-neon/[0.015]"
-            style={{ opacity: vis ? 1 : 0, transform: vis ? `translateX(0)` : `translateX(${s.dir === "minus" ? "-12px" : s.dir === "multiply" ? "0" : "12px"})`, transition: `all 0.5s ease ${i * 0.1}s` }}>
+          <div key={s.label} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg bg-neon/[0.015] transition-all duration-500 ${vis ? "opacity-100 translate-x-0" : `opacity-0 ${s.dir === "minus" ? "-translate-x-3" : s.dir === "multiply" ? "" : "translate-x-3"}`}`}
+            style={{ transitionDelay: `${i * 0.1}s` }}>
             <div className="flex-1 min-w-0">
               <p className="text-[11px] font-sans text-[#F8F9FA]/65">{s.label}</p>
               <p className="text-[8px] text-[#6C7A89]/30 font-mono">{s.note}</p>
@@ -416,7 +416,7 @@ function InvestorMath() {
       </div>
 
       {/* Deal strength meter */}
-      <div className="mt-4 p-4 rounded-xl glass-card-strong" style={{ opacity: vis ? 1 : 0, transition: "opacity 1s ease 0.7s" }}>
+        <div className={`mt-4 p-4 rounded-xl glass-card-strong transition-opacity duration-1000 delay-700 ${vis ? "opacity-100" : "opacity-0"}`}>
         <div className="flex items-center justify-between mb-2">
           <p className="text-[9px] text-[#6C7A89]/40 font-mono uppercase tracking-wider">Deal Strength</p>
           <span className="font-display text-sm font-bold text-neon">{dealStrength}/100</span>
@@ -433,7 +433,7 @@ function InvestorMath() {
       </div>
 
       {/* Range reasoning */}
-      <div className="mt-3 space-y-1.5" style={{ opacity: vis ? 1 : 0, transition: "opacity 1s ease 0.9s" }}>
+        <div className={`mt-3 space-y-1.5 transition-opacity duration-1000 delay-[900ms] ${vis ? "opacity-100" : "opacity-0"}`}>
         <p className="text-[8px] text-[#6C7A89]/35 font-mono uppercase tracking-wider">Offer Range Reasoning</p>
         {[
           { label: "Conservative (Low)", value: "$272,000", reason: "Higher repair buffer + risk" },
@@ -457,10 +457,9 @@ function DealVerdict() {
   useEffect(() => { const t = setTimeout(() => setVis(true), 500); return () => clearTimeout(t) }, [])
 
   return (
-    <div className="relative rounded-2xl p-5 overflow-hidden"
+    <div className={`relative rounded-2xl p-5 overflow-hidden transition-all duration-700 ${vis ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-3 scale-[0.98]"}`}
       style={{
-        opacity: vis ? 1 : 0, transform: vis ? "translateY(0) scale(1)" : "translateY(12px) scale(0.98)",
-        transition: "all 0.8s cubic-bezier(0.34,1.56,0.64,1)",
+        transitionTimingFunction: "cubic-bezier(0.34,1.56,0.64,1)",
         background: "linear-gradient(135deg, rgba(0,228,255,0.06), rgba(20,255,161,0.04), rgba(0,228,255,0.03))",
         border: "1px solid rgba(20,255,161,0.15)",
         boxShadow: "0 0 40px rgba(20,255,161,0.06), 0 8px 32px rgba(0,0,0,0.4)",
@@ -513,7 +512,7 @@ export function DashboardPage({ address }: { address: string }) {
 
       <div className="relative max-w-3xl mx-auto px-4 py-8 md:py-12">
         {/* Header */}
-        <div className="mb-6" style={{ opacity: vis ? 1 : 0, transform: vis ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease" }}>
+        <div className={`mb-6 transition-all duration-700 ease-out ${vis ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
           <div className="flex items-center gap-3 mb-3">
             <div className="w-9 h-9 rounded-lg bg-neon/[0.06] border border-neon/[0.1] flex items-center justify-center">
               <Home size={16} className="text-neon" />
@@ -537,8 +536,7 @@ export function DashboardPage({ address }: { address: string }) {
         </div>
 
         {/* Offer summary bar */}
-        <div className="glass-card-strong rounded-2xl p-4 mb-5 flex flex-col md:flex-row items-center justify-between gap-3"
-          style={{ opacity: vis ? 1 : 0, transform: vis ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease 0.1s" }}>
+        <div className={`glass-card-strong rounded-2xl p-4 mb-5 flex flex-col md:flex-row items-center justify-between gap-3 transition-all duration-700 ease-out delay-100 ${vis ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
           <div className="text-center md:text-left">
             <p className="text-[8px] text-[#6C7A89]/35 font-mono uppercase tracking-wider mb-0.5">Cash Offer</p>
             <p className="font-display text-2xl md:text-3xl font-bold neon-text">$287,500</p>
@@ -558,12 +556,12 @@ export function DashboardPage({ address }: { address: string }) {
           {tab === 0 && (
             <>
               <DealVerdict />
-              <div style={{ opacity: vis ? 1 : 0, transform: vis ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease 0.2s" }}><DataTimeline /></div>
+              <div className={`transition-all duration-700 ease-out delay-200 ${vis ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}><DataTimeline /></div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div style={{ opacity: vis ? 1 : 0, transform: vis ? "translateX(0)" : "translateX(-16px)", transition: "all 0.8s ease 0.3s" }}><MarketIntel /></div>
-                <div style={{ opacity: vis ? 1 : 0, transform: vis ? "translateX(0)" : "translateX(16px)", transition: "all 0.8s ease 0.4s" }}><RepairEngine /></div>
+                <div className={`transition-all duration-700 ease-out delay-300 ${vis ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-4"}`}><MarketIntel /></div>
+                <div className={`transition-all duration-700 ease-out delay-[400ms] ${vis ? "opacity-100 translate-x-0" : "opacity-0 translate-x-4"}`}><RepairEngine /></div>
               </div>
-              <div className="glass-card rounded-2xl p-5" style={{ opacity: vis ? 1 : 0, transition: "all 0.8s ease 0.5s" }}>
+              <div className={`glass-card rounded-2xl p-5 transition-all duration-700 ease-out delay-500 ${vis ? "opacity-100" : "opacity-0"}`}>
                 <div className="flex items-center gap-2 mb-4"><Target size={14} className="text-neon" /><h2 className="font-display text-sm font-semibold text-[#F8F9FA] uppercase tracking-wider">Investment Metrics</h2></div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   {[{ l: "Cap Rate", v: 92 }, { l: "Cash-on-Cash", v: 78 }, { l: "GRM Score", v: 85 }, { l: "Risk Score", v: 88 }].map((m, i) => (
@@ -580,7 +578,7 @@ export function DashboardPage({ address }: { address: string }) {
         </div>
 
         {/* Action buttons with ripple */}
-        <div className="mt-8 grid grid-cols-2 md:grid-cols-5 gap-2.5" style={{ opacity: vis ? 1 : 0, transform: vis ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease 0.6s" }}>
+        <div className={`mt-8 grid grid-cols-2 md:grid-cols-5 gap-2.5 transition-all duration-700 ease-out delay-[600ms] ${vis ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
           {[
             { label: "Send to Podio", icon: Send, primary: false },
             { label: "Generate Contract", icon: FileText, primary: true },

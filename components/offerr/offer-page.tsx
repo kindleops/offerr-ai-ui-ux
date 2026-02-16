@@ -139,7 +139,7 @@ export function OfferPage({ address, onGenerateContract }: OfferPageProps) {
 
       <div className="relative max-w-2xl mx-auto px-4 py-10 md:py-16">
         {/* Header */}
-        <div className="text-center mb-8" style={{ opacity: v ? 1 : 0, transform: v ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease" }}>
+        <div className={`text-center mb-8 transition-all duration-700 ease-out ${v ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass-card text-[10px] font-mono text-neon/70 mb-3 uppercase tracking-wider">
             <div className="w-1.5 h-1.5 rounded-full bg-neon animate-pulse" />
             AI Analysis Complete
@@ -151,7 +151,8 @@ export function OfferPage({ address, onGenerateContract }: OfferPageProps) {
         </div>
 
         {/* Main offer card */}
-        <div className="mb-8" style={{ opacity: v ? 1 : 0, transform: v ? "translateY(0) scale(1)" : "translateY(24px) scale(0.98)", transition: "all 1s cubic-bezier(0.34,1.56,0.64,1) 0.2s" }}>
+        <div className={`mb-8 transition-all duration-1000 delay-200 ${v ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-6 scale-[0.98]"}`}
+          style={{ transitionTimingFunction: "cubic-bezier(0.34,1.56,0.64,1)" }}>
           <div className="glass-card-strong rounded-2xl p-6 md:p-8 relative overflow-hidden">
             {/* Shimmer */}
             <div className="absolute inset-0 pointer-events-none overflow-hidden" aria-hidden="true">
@@ -174,8 +175,8 @@ export function OfferPage({ address, onGenerateContract }: OfferPageProps) {
               {/* Low/Mid/High staggered */}
               <div className="flex items-center justify-center gap-6 md:gap-8 mb-6">
                 {[{ label: "Low", value: "$272,000" }, { label: "Mid", value: "$287,500" }, { label: "High", value: "$305,000" }].map((item, i) => (
-                  <div key={item.label} className="text-center"
-                    style={{ opacity: v ? 1 : 0, transform: v ? "translateY(0)" : "translateY(12px)", transition: `all 0.6s ease ${1 + i * 0.15}s` }}>
+                  <div key={item.label} className={`text-center transition-all duration-600 ${v ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"}`}
+                    style={{ transitionDelay: `${1 + i * 0.15}s` }}>
                     <p className="text-[10px] text-[#6C7A89]/40 font-sans uppercase tracking-wider mb-1">{item.label}</p>
                     <p className="font-display font-semibold text-[#F8F9FA] text-sm md:text-base">{item.value}</p>
                   </div>
@@ -194,8 +195,8 @@ export function OfferPage({ address, onGenerateContract }: OfferPageProps) {
               {/* Quick stats */}
               <div className="grid grid-cols-3 gap-4 w-full mt-6 pt-5 border-t border-[rgba(0,228,255,0.06)]">
                 {[{ label: "ARV", value: "$345,000" }, { label: "Est. Repairs", value: "$32,500" }, { label: "Net Profit", value: "$25,000" }].map((s, i) => (
-                  <div key={s.label} className="text-center"
-                    style={{ opacity: cards ? 1 : 0, transform: cards ? "translateY(0)" : "translateY(8px)", transition: `all 0.5s ease ${i * 0.1}s` }}>
+                  <div key={s.label} className={`text-center transition-all duration-500 ${cards ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"}`}
+                    style={{ transitionDelay: `${i * 0.1}s` }}>
                     <p className="text-[9px] text-[#6C7A89]/35 font-mono uppercase tracking-wider mb-1">{s.label}</p>
                     <p className="font-display font-semibold text-[#F8F9FA] text-sm">{s.value}</p>
                   </div>
@@ -207,12 +208,11 @@ export function OfferPage({ address, onGenerateContract }: OfferPageProps) {
 
         {/* Market Snapshot with sparklines */}
         <div className="mb-8">
-          <h2 className="font-display text-sm font-semibold text-[#F8F9FA]/80 mb-3 uppercase tracking-wider"
-            style={{ opacity: snap ? 1 : 0, transition: "opacity 0.6s ease" }}>Market Snapshot</h2>
+          <h2 className={`font-display text-sm font-semibold text-[#F8F9FA]/80 mb-3 uppercase tracking-wider transition-opacity duration-600 ${snap ? "opacity-100" : "opacity-0"}`}>Market Snapshot</h2>
           <div className="grid grid-cols-2 gap-3">
             {marketData.map((item, i) => (
-              <div key={item.label} className="glass-card-hover rounded-xl p-4 relative overflow-hidden"
-                style={{ opacity: snap ? 1 : 0, transform: snap ? "translateX(0)" : `translateX(${i % 2 === 0 ? "-" : ""}20px)`, transition: `all 0.6s cubic-bezier(0.16,1,0.3,1) ${i * 0.08}s` }}>
+              <div key={item.label} className={`glass-card-hover rounded-xl p-4 relative overflow-hidden transition-all duration-600 ${snap ? "opacity-100 translate-x-0" : `opacity-0 ${i % 2 === 0 ? "-translate-x-5" : "translate-x-5"}`}`}
+                style={{ transitionDelay: `${i * 0.08}s`, transitionTimingFunction: "cubic-bezier(0.16,1,0.3,1)" }}>
                 {/* Background sparkline */}
                 <div className="absolute bottom-0 left-0 right-0 h-10 opacity-30 pointer-events-none">
                   <Sparkline data={item.sparkData} color={item.change.startsWith("+") ? "#14FFA1" : "#00E4FF"} />
@@ -233,7 +233,7 @@ export function OfferPage({ address, onGenerateContract }: OfferPageProps) {
         </div>
 
         {/* Valuation Breakdown with confidence tags */}
-        <div className="mb-10" style={{ opacity: cards ? 1 : 0, transform: cards ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease" }}>
+        <div className={`mb-10 transition-all duration-700 ease-out ${cards ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
           <h2 className="font-display text-sm font-semibold text-[#F8F9FA]/80 mb-3 uppercase tracking-wider">Valuation Breakdown</h2>
           <div className="space-y-2.5">
             {[
@@ -254,7 +254,7 @@ export function OfferPage({ address, onGenerateContract }: OfferPageProps) {
         </div>
 
         {/* Toggles */}
-        <div className="flex items-center justify-center gap-3 mb-8" style={{ opacity: cta ? 1 : 0, transition: "opacity 0.6s ease" }}>
+        <div className={`flex items-center justify-center gap-3 mb-8 transition-opacity duration-600 ${cta ? "opacity-100" : "opacity-0"}`}>
           {["View Formula Breakdown", "See Market Rationale"].map((label) => (
             <button key={label} className="px-3 py-2 rounded-lg glass-card text-[10px] font-mono text-neon/50 hover:text-neon/70 hover:border-neon/20 transition-all duration-300 min-h-[36px]">
               {label}
@@ -263,7 +263,7 @@ export function OfferPage({ address, onGenerateContract }: OfferPageProps) {
         </div>
 
         {/* CTA */}
-        <div className="text-center" style={{ opacity: cta ? 1 : 0, transform: cta ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease" }}>
+        <div className={`text-center transition-all duration-700 ease-out ${cta ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
           <button onClick={onGenerateContract}
             className="inline-flex items-center gap-3 px-8 py-4 rounded-xl font-display font-semibold text-base bg-neon text-[#04070A] animate-breathe hover:shadow-[0_0_45px_rgba(0,228,255,0.4)] active:scale-[0.97] transition-all duration-300 min-h-[52px]">
             Generate Contract<ArrowRight size={18} />

@@ -161,16 +161,16 @@ export function ContractPage({ address, onComplete }: ContractPageProps) {
 
       <div className="relative max-w-xl mx-auto px-4 py-10 md:py-16">
         {/* Header */}
-        <div className="text-center mb-6" style={{ opacity: vis ? 1 : 0, transform: vis ? "translateY(0)" : "translateY(16px)", transition: "all 0.8s ease" }}>
+        <div className={`text-center mb-6 transition-all duration-700 ease-out ${vis ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
           <h1 className="font-display text-2xl md:text-3xl font-bold text-[#F8F9FA] mb-1">Contract Generation</h1>
           <p className="text-[10px] text-[#6C7A89]/35 font-mono">{address}</p>
         </div>
 
         {/* Signature animation */}
-        <div style={{ opacity: vis ? 1 : 0, transition: "opacity 1s ease 0.3s" }}><RotatingSignature /></div>
+        <div className={`transition-opacity duration-1000 delay-300 ${vis ? "opacity-100" : "opacity-0"}`}><RotatingSignature /></div>
 
         {/* Document hologram with glowing frame */}
-        <div className="my-4" style={{ opacity: vis ? 1 : 0, transform: vis ? "translateY(0)" : "translateY(16px)", transition: "all 1s ease 0.4s" }}>
+        <div className={`my-4 transition-all duration-1000 delay-[400ms] ${vis ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
           <div className="glass-card rounded-2xl p-3 overflow-hidden relative">
             <div className="absolute inset-0 rounded-2xl pointer-events-none animate-pulse-glow" aria-hidden="true" />
             <DocumentHologram />
@@ -183,8 +183,7 @@ export function ContractPage({ address, onComplete }: ContractPageProps) {
             const isComplete = i < step; const isActive = i === step && !done; const Icon = s.icon
             return (
               <div key={s.label}
-                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-500 ${isComplete ? "glass-card-strong" : isActive ? "glass-card neon-border" : "opacity-15"}`}
-                style={{ opacity: vis ? (isComplete || isActive ? 1 : 0.15) : 0, transform: vis ? "translateX(0)" : "translateX(-16px)", transition: `all 0.5s ease ${i * 0.1}s` }}>
+                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-500 ${isComplete ? "glass-card-strong" : isActive ? "glass-card neon-border" : ""} ${vis ? (isComplete || isActive ? "opacity-100" : "opacity-[0.15]") : "opacity-0"} ${vis ? "translate-x-0" : "-translate-x-4"}`}>
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-300 flex-shrink-0 ${isComplete ? "bg-neon/[0.12] text-neon" : isActive ? "bg-neon/[0.06] text-neon animate-pulse" : "bg-[#6C7A89]/5 text-[#6C7A89]/20"}`}>
                   {isComplete ? <Check size={12} /> : <Icon size={12} />}
                 </div>
@@ -202,7 +201,7 @@ export function ContractPage({ address, onComplete }: ContractPageProps) {
         </div>
 
         {/* SignPro badge */}
-        <div className="flex items-center justify-center mb-6" style={{ opacity: vis ? 1 : 0, transition: "opacity 1s ease 0.5s" }}>
+        <div className={`flex items-center justify-center mb-6 transition-opacity duration-1000 delay-500 ${vis ? "opacity-100" : "opacity-0"}`}>
           <div className="glass-card rounded-full px-4 py-2 flex items-center gap-2">
             <Shield size={11} className="text-neon/45" />
             <span className="text-[10px] font-sans text-[#6C7A89]/45">Powered by <span className="text-neon/60 font-medium">SignPro.ai</span></span>
