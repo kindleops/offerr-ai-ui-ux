@@ -6,7 +6,10 @@
     "dev": "next dev --turbo",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:offerr": "node --conditions=react-server --test tests/offerr/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && npm run test:offerr"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -53,6 +56,7 @@
     "react-hook-form": "^7.54.1",
     "react-resizable-panels": "^2.1.7",
     "recharts": "2.15.0",
+    "server-only": "^0.0.1",
     "sonner": "^1.7.1",
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",

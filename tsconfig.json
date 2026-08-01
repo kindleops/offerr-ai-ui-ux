@@ -9,6 +9,10 @@
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
+    // Lets server modules import siblings with an explicit `.ts` extension, so
+    // the same files run unmodified under the plain Node test runner (Node ESM
+    // requires extensions) as well as through Turbopack. Safe with noEmit.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
