@@ -9,11 +9,21 @@
  * after it, and each refuses without revealing why:
  *
  *   gate -> origin/CSRF -> size -> session -> parse -> honeypot -> validate
- *        -> rate limit -> per-property cooldown -> idempotency -> upstream
- *        -> seller-safe projection
+ *        -> idempotency key -> replay lookup (read budget)
+ *        -> submit rate limits -> per-property cooldown
+ *        -> distributed reservation -> upstream -> seller-safe projection
+ *        -> egress assertion
  *
  * The upstream call is LAST, so nothing unauthenticated, oversized, malformed
  * or rate-limited can reach the internal evaluation service.
+ *
+ * WHY THE REPLAY LOOKUP MOVED ABOVE THE SUBMIT COUNTERS
+ * ----------------------------------------------------
+ * A replay is a READ — it starts no evaluation. Charging it against the submit
+ * allowance meant five refreshes of a finished result produced a 429 even
+ * though nothing downstream ever ran. It is now bounded by the read rule, and
+ * the submit counters are consumed only when a genuinely new evaluation is
+ * about to happen.
  */
 
 import { NextResponse } from 'next/server';
@@ -43,9 +53,10 @@ import {
   hashedClientIp,
   markPropertyEvaluated,
 } from '@/lib/offerr/rate-limit';
-import { findByIdempotencyKey, putResult, runOnceForKey } from '@/lib/offerr/result-store';
+import { findByIdempotencyKey, runOnceForKey } from '@/lib/offerr/result-store';
 import { evaluateUpstream } from '@/lib/offerr/evaluation-client';
 import { failureToSellerSafe, toSellerSafeResult } from '@/lib/offerr/outcomes';
+import { assertSellerSafe } from '@/lib/offerr/upstream-contract';
 import { addressLogRef, hashRef, logEvent } from '@/lib/offerr/safe-log';
 
 export const runtime = 'nodejs';
@@ -56,8 +67,28 @@ function refuse(status: number, error: string, extra: Record<string, unknown> = 
   return NextResponse.json({ ok: false, error, ...extra }, { status });
 }
 
+function rateLimited(retryAfterSeconds: number) {
+  return NextResponse.json(
+    { ok: false, error: 'rate_limited', retryAfterSeconds },
+    { status: 429, headers: { 'retry-after': String(retryAfterSeconds) } },
+  );
+}
+
 function supportCode(correlationId: string): string {
   return correlationId.slice(0, 8).toUpperCase();
+}
+
+/**
+ * Final egress gate. If the object about to be serialized carries anything not
+ * on the seller-safe allowlist, the response is replaced with a neutral
+ * unavailability rather than shipped. Failing closed here means a leak becomes
+ * an outage, which is the safe direction.
+ */
+function sealed(result: unknown, correlationId: string) {
+  const check = assertSellerSafe(result as Record<string, unknown>);
+  if (check.ok) return result;
+  logEvent('intake.egress_blocked', { correlation_id: correlationId, field: check.field });
+  return failureToSellerSafe('upstream_unavailable', supportCode(correlationId));
 }
 
 export async function POST(request: Request) {
@@ -147,68 +178,88 @@ export async function POST(request: Request) {
   }
   const submission = parsed.data;
 
-  // ── Rate limits ─────────────────────────────────────────────────────────
-  const ipRef = hashedClientIp(headerStore);
-  const perSession = consume(`submit:sid:${session.sid}`, RATE_RULES.submitPerSession);
-  const perIp = consume(`submit:ip:${ipRef}`, RATE_RULES.submitPerIp);
-  if (!perSession.allowed || !perIp.allowed) {
-    const retryAfter = Math.max(perSession.retryAfterSeconds, perIp.retryAfterSeconds);
-    logEvent('intake.rate_limited', { correlation_id: correlationId, retry_after_s: retryAfter });
-    return NextResponse.json(
-      { ok: false, error: 'rate_limited', retryAfterSeconds: retryAfter },
-      { status: 429, headers: { 'retry-after': String(retryAfter) } },
-    );
-  }
-
   // ── Idempotency, derived SERVER-SIDE from session + submission ──────────
   const address = composeAddress(submission.property);
+  const sellerFacts = toSellerFacts(submission);
   const fingerprint = submissionFingerprint({
     normalizedAddress: address,
     unit: submission.property.unit,
-    sellerFacts: toSellerFacts(submission),
+    sellerFacts,
   });
   const idempotencyKey = deriveIdempotencyKey(session.sid, fingerprint);
 
-  const existing = findByIdempotencyKey(idempotencyKey, session.sid);
-  if (existing) {
-    logEvent('intake.replayed', {
+  try {
+    // ── Replay: a read, bounded by the read rule, never charged to submits ─
+    const readBudget = await consume(`read:sid:${session.sid}`, RATE_RULES.readPerSession);
+    if (!readBudget.allowed) return rateLimited(readBudget.retryAfterSeconds);
+
+    const existing = await findByIdempotencyKey(idempotencyKey, session.sid);
+    if (existing) {
+      logEvent('intake.replayed', {
+        correlation_id: correlationId,
+        idempotency_ref: hashRef(idempotencyKey),
+        ...addressLogRef(address),
+      });
+      return NextResponse.json({
+        ok: true,
+        resultId: existing.resultId,
+        result: sealed(existing.result, correlationId),
+        replay: true,
+      });
+    }
+
+    // ── Submit limits — a genuinely NEW evaluation only ────────────────────
+    const ipRef = hashedClientIp(headerStore);
+    const [perSession, perIp] = await Promise.all([
+      consume(`submit:sid:${session.sid}`, RATE_RULES.submitPerSession),
+      consume(`submit:ip:${ipRef}`, RATE_RULES.submitPerIp),
+    ]);
+    if (!perSession.allowed || !perIp.allowed) {
+      const retryAfter = Math.max(perSession.retryAfterSeconds, perIp.retryAfterSeconds);
+      logEvent('intake.rate_limited', { correlation_id: correlationId, retry_after_s: retryAfter });
+      return rateLimited(retryAfter);
+    }
+
+    const cooldown = await checkPropertyCooldown(session.sid, fingerprint);
+    if (!cooldown.allowed) {
+      logEvent('intake.cooldown', { correlation_id: correlationId, retry_after_s: cooldown.retryAfterSeconds });
+      return rateLimited(cooldown.retryAfterSeconds);
+    }
+
+    // ── Upstream + projection ─────────────────────────────────────────────
+    const startedAt = Date.now();
+    logEvent('intake.evaluation_started', {
       correlation_id: correlationId,
       idempotency_ref: hashRef(idempotencyKey),
       ...addressLogRef(address),
     });
-    return NextResponse.json({ ok: true, resultId: existing.resultId, result: existing.result, replay: true });
-  }
 
-  // Cooldown applies only to a genuinely NEW evaluation — a replay above is
-  // free, so a refresh is never punished.
-  const cooldown = checkPropertyCooldown(session.sid, fingerprint);
-  if (!cooldown.allowed) {
-    logEvent('intake.cooldown', { correlation_id: correlationId, retry_after_s: cooldown.retryAfterSeconds });
-    return NextResponse.json(
-      { ok: false, error: 'rate_limited', retryAfterSeconds: cooldown.retryAfterSeconds },
-      { status: 429, headers: { 'retry-after': String(cooldown.retryAfterSeconds) } },
-    );
-  }
-
-  // ── Upstream + projection ───────────────────────────────────────────────
-  const startedAt = Date.now();
-  logEvent('intake.evaluation_started', {
-    correlation_id: correlationId,
-    idempotency_ref: hashRef(idempotencyKey),
-    ...addressLogRef(address),
-  });
-
-  try {
-    const stored = await runOnceForKey(idempotencyKey, async () => {
+    const stored = await runOnceForKey(idempotencyKey, session.sid, newResultId, async () => {
       const view = await evaluateUpstream({
         address,
         idempotencyKey,
-        sellerFacts: toSellerFacts(submission),
+        sellerFacts,
         correlationId,
       });
+
+      if (view.contractField) {
+        // The backend returned a privileged field. Record the KEY NAME only —
+        // this is a contract regression that must be visible in logs.
+        logEvent('intake.contract_violation', {
+          correlation_id: correlationId,
+          field: view.contractField,
+        });
+      }
+
       const result = toSellerSafeResult({ ...view, supportCode: supportCode(correlationId) });
-      markPropertyEvaluated(session.sid, fingerprint);
-      return putResult({ resultId: newResultId(), sid: session.sid, idempotencyKey, result });
+
+      // A retryable outcome must stay retryable: it is neither cached under the
+      // idempotency key nor allowed to start the property cooldown, so an
+      // immediate retry genuinely re-evaluates.
+      if (result.retryable) return { result, cacheable: false };
+
+      await markPropertyEvaluated(session.sid, fingerprint);
+      return { result, cacheable: true };
     });
 
     logEvent('intake.evaluation_finished', {
@@ -217,12 +268,15 @@ export async function POST(request: Request) {
       duration_ms: Date.now() - startedAt,
     });
 
-    return NextResponse.json({ ok: true, resultId: stored.resultId, result: stored.result });
+    return NextResponse.json({
+      ok: true,
+      resultId: stored.resultId,
+      result: sealed(stored.result, correlationId),
+    });
   } catch (error) {
     // Internal errors are classified, never described. No message, no stack.
     logEvent('intake.failed', {
       correlation_id: correlationId,
-      duration_ms: Date.now() - startedAt,
       error_class: (error as Error)?.name ?? 'Error',
     });
     const result = failureToSellerSafe('upstream_unavailable', supportCode(correlationId));

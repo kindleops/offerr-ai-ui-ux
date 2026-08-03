@@ -13,22 +13,38 @@
 
 import { NextResponse } from 'next/server';
 
+import { headers } from 'next/headers';
+
 import { SESSION_TTL_MS, PREVIEW_TOKEN_COOKIE } from '@/lib/offerr/session';
 import { evaluateGates, isProductionDeployment } from '@/lib/offerr/preview-config';
+import { RATE_RULES, consume, hashedClientIp } from '@/lib/offerr/rate-limit';
 import { logEvent } from '@/lib/offerr/safe-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const DENIED = { ok: false, error: 'not_available' } as const;
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const token = url.searchParams.get('token');
+
+  // This is the only unauthenticated endpoint that checks the preview token, so
+  // without a limit it is an unbounded guessing oracle. The refusal is byte-for
+  // -byte identical to a gate refusal, so the limit itself is not a probe
+  // signal: a caller cannot tell "throttled" from "wrong token".
+  const headerStore = await headers();
+  const throttle = await consume(`access:ip:${hashedClientIp(headerStore)}`, RATE_RULES.accessPerIp);
+  if (!throttle.allowed) {
+    logEvent('access.denied', { reason: 'rate_limited' });
+    return NextResponse.json(DENIED, { status: 404 });
+  }
 
   const gate = evaluateGates(token);
   if (!gate.ok) {
     logEvent('access.denied', { reason: gate.failure });
     // Same response for "wrong token", "gate off" and "production".
-    return NextResponse.json({ ok: false, error: 'not_available' }, { status: 404 });
+    return NextResponse.json(DENIED, { status: 404 });
   }
 
   const response = NextResponse.redirect(new URL('/offerr/start', url.origin));

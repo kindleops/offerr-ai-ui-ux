@@ -207,7 +207,8 @@ export function StepReview({
           checked={draft.consent}
           onChange={(e) => update("consent", e.target.checked)}
           className="mt-0.5 h-4 w-4 shrink-0 accent-[#00E4FF]"
-          aria-describedby="offerr-consent-error"
+          aria-invalid={touched && !draft.consent ? true : undefined}
+          aria-describedby={touched && !draft.consent ? "offerr-consent-error" : undefined}
         />
         <span className="text-sm text-white/70">
           Please evaluate this property and show me a preliminary range. I understand this is not an

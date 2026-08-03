@@ -1,5 +1,5 @@
 /**
- * Session-bound result store — SERVER ONLY.
+ * Session-bound durable result store — SERVER ONLY.
  *
  * AUTHORIZATION MODEL
  * -------------------
@@ -7,145 +7,136 @@
  * id AND the session id that created it. Presenting a valid id from a different
  * session is refused as `not_found` — deliberately indistinguishable from an id
  * that never existed, so the endpoint cannot be used to test whether a given
- * result exists.
+ * result exists. That check lives in SQL (`offerr_preview.read_result`), not
+ * here, so it cannot be bypassed by a future caller.
  *
- * IDEMPOTENCY
- * -----------
- * Submissions are keyed by the server-derived idempotency key. A refresh, a
- * double-click, or a retry of the same answers returns the SAME stored result
- * rather than starting a second evaluation, so no duplicate snapshot is created
- * downstream. An in-flight submission is recorded before the upstream call so
- * two concurrent submits collapse onto one.
+ * DISTRIBUTED SINGLE-FLIGHT
+ * -------------------------
+ * The old implementation collapsed concurrent submissions with an in-process
+ * promise map, which only works when both requests land on the same instance.
+ * `runOnceForKey` now takes an atomic RESERVATION in Postgres before the
+ * upstream call:
  *
- * PRODUCTION LIMITATION
- * ---------------------
- * In-process and therefore per-instance and non-durable, exactly like the rate
- * limiter. Fine for a closed preview; must become a shared store (Redis, or the
- * Offerr tables themselves once activation is approved) before launch.
+ *   - exactly one caller wins the reservation and performs the evaluation;
+ *   - every other caller — on any instance — observes the pending reservation
+ *     and waits for the winner's result rather than starting a second one;
+ *   - a reservation carries a LEASE, so an instance that dies mid-call cannot
+ *     wedge the key until its TTL expires.
+ *
+ * RETRYABLE FAILURES ARE NOT CACHED
+ * ---------------------------------
+ * A transient upstream failure releases the reservation instead of storing it.
+ * Caching one would tell the seller "try again in a moment" and then replay the
+ * same failure for the whole result TTL, and would burn the property cooldown
+ * on an evaluation that produced nothing.
  */
 
 import 'server-only';
 
 import { RESULT_TTL_MS } from './session.ts';
 import type { SellerSafeResult } from './outcomes.ts';
+import { getPreviewStore, StoreUnavailableError, type ReadOutcome } from './preview-store.ts';
 
-interface StoredResult {
+export type { ReadOutcome };
+
+/** How long a reservation holder may take before another caller may reclaim it. */
+const RESERVATION_LEASE_MS = 45_000;
+/** How long a loser waits for the winner, and how often it re-checks. */
+const WAIT_TIMEOUT_MS = 40_000;
+const WAIT_POLL_MS = 400;
+
+export interface StoredResult {
   resultId: string;
-  sid: string;
-  idempotencyKey: string;
   result: SellerSafeResult;
-  createdAt: number;
-  expiresAt: number;
 }
 
-const byResultId = new Map<string, StoredResult>();
-const byIdempotencyKey = new Map<string, string>();
-/** Idempotency keys whose upstream call is currently in flight. */
-const inFlight = new Map<string, Promise<StoredResult>>();
-
-const MAX_RESULTS = 5_000;
-
-function sweep(now: number) {
-  for (const [id, stored] of byResultId) {
-    if (stored.expiresAt <= now) {
-      byResultId.delete(id);
-      byIdempotencyKey.delete(stored.idempotencyKey);
-    }
-  }
-  if (byResultId.size >= MAX_RESULTS) {
-    // Evict oldest first rather than clearing: dropping everything would log
-    // out every seller mid-journey.
-    const ordered = [...byResultId.values()].sort((a, b) => a.createdAt - b.createdAt);
-    for (const stored of ordered.slice(0, Math.ceil(MAX_RESULTS / 4))) {
-      byResultId.delete(stored.resultId);
-      byIdempotencyKey.delete(stored.idempotencyKey);
-    }
-  }
-}
-
-export function putResult(entry: {
-  resultId: string;
-  sid: string;
-  idempotencyKey: string;
-  result: SellerSafeResult;
-  now?: number;
-}): StoredResult {
-  const now = entry.now ?? Date.now();
-  sweep(now);
-  const stored: StoredResult = {
-    resultId: entry.resultId,
-    sid: entry.sid,
-    idempotencyKey: entry.idempotencyKey,
-    result: entry.result,
-    createdAt: now,
-    expiresAt: now + RESULT_TTL_MS,
-  };
-  byResultId.set(stored.resultId, stored);
-  byIdempotencyKey.set(stored.idempotencyKey, stored.resultId);
-  return stored;
-}
-
-export type ReadOutcome =
-  | { status: 'ok'; result: SellerSafeResult; expiresAt: number }
-  | { status: 'not_found' }
-  | { status: 'expired' };
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Read a result. `sid` is REQUIRED and must match the creating session; a
- * mismatch is reported as `not_found`, never as `forbidden`, so the caller
- * learns nothing about whether the id is real.
+ * Existing result for a server-derived idempotency key, if still live. Returns
+ * null while an evaluation is merely reserved — a pending reservation is not a
+ * result and must not be rendered as one.
  */
-export function readResult(resultId: string, sid: string, now = Date.now()): ReadOutcome {
-  const stored = byResultId.get(resultId);
-  if (!stored) return { status: 'not_found' };
-  if (stored.sid !== sid) return { status: 'not_found' };
-  if (stored.expiresAt <= now) {
-    byResultId.delete(resultId);
-    byIdempotencyKey.delete(stored.idempotencyKey);
-    return { status: 'expired' };
-  }
-  return { status: 'ok', result: stored.result, expiresAt: stored.expiresAt };
-}
-
-/** Existing result for a server-derived idempotency key, if still live. */
-export function findByIdempotencyKey(
+export async function findByIdempotencyKey(
   idempotencyKey: string,
   sid: string,
-  now = Date.now(),
-): StoredResult | null {
-  const resultId = byIdempotencyKey.get(idempotencyKey);
-  if (!resultId) return null;
-  const stored = byResultId.get(resultId);
-  if (!stored) return null;
-  if (stored.sid !== sid) return null;
-  if (stored.expiresAt <= now) return null;
-  return stored;
+): Promise<StoredResult | null> {
+  const found = await getPreviewStore().findByKey(idempotencyKey, sid);
+  if (found.state !== 'ready' || !found.resultId || !found.result) return null;
+  return { resultId: found.resultId, result: found.result };
 }
 
+export async function readResult(resultId: string, sid: string): Promise<ReadOutcome> {
+  return getPreviewStore().readResult(resultId, sid);
+}
+
+export type EvaluationWork = () => Promise<{ result: SellerSafeResult; cacheable: boolean }>;
+
 /**
- * Collapse concurrent submissions of the same key onto a single upstream call.
- * Without this, a double-click fires two evaluations before either has stored a
- * result, and the idempotency check above cannot help because neither has
- * finished yet.
+ * Run `work` exactly once per idempotency key across every instance.
+ *
+ * The winner evaluates and publishes. Losers wait for the published result. If
+ * the work produces a non-cacheable (retryable) outcome the reservation is
+ * released, so an immediate retry genuinely re-evaluates.
  */
 export async function runOnceForKey(
   idempotencyKey: string,
-  work: () => Promise<StoredResult>,
+  sid: string,
+  newResultId: () => string,
+  work: EvaluationWork,
 ): Promise<StoredResult> {
-  const existing = inFlight.get(idempotencyKey);
-  if (existing) return existing;
+  const store = getPreviewStore();
+  const candidateId = newResultId();
 
-  const promise = work().finally(() => {
-    inFlight.delete(idempotencyKey);
-  });
-  inFlight.set(idempotencyKey, promise);
-  return promise;
+  const reservation = await store.reserve(
+    idempotencyKey,
+    sid,
+    candidateId,
+    RESULT_TTL_MS,
+    RESERVATION_LEASE_MS,
+  );
+
+  // ── We lost the race: wait for the winner rather than evaluating again ────
+  if (reservation.state === 'ready' && reservation.resultId && reservation.result) {
+    return { resultId: reservation.resultId, result: reservation.result };
+  }
+
+  if (reservation.state === 'pending') {
+    const deadline = Date.now() + WAIT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await sleep(WAIT_POLL_MS);
+      const current = await store.findByKey(idempotencyKey, sid);
+      if (current.state === 'ready' && current.resultId && current.result) {
+        return { resultId: current.resultId, result: current.result };
+      }
+      // The winner released a retryable failure; stop waiting and report it.
+      if (current.state === 'gone') break;
+    }
+    // The winner never published. Surface a transient failure rather than
+    // starting a duplicate evaluation behind its back.
+    throw new StoreUnavailableError('reservation did not resolve');
+  }
+
+  if (reservation.state === 'gone') {
+    // The key expired or belongs to another session. Treat as transient.
+    throw new StoreUnavailableError('reservation unavailable');
+  }
+
+  // ── We won: evaluate, then publish or release ────────────────────────────
+  try {
+    const { result, cacheable } = await work();
+
+    if (!cacheable) {
+      await store.release(idempotencyKey);
+      return { resultId: candidateId, result };
+    }
+
+    await store.complete(idempotencyKey, candidateId, result, RESULT_TTL_MS);
+    return { resultId: candidateId, result };
+  } catch (error) {
+    // Never leave a reservation behind on an unexpected fault; the next attempt
+    // must be able to proceed immediately.
+    await store.release(idempotencyKey).catch(() => {});
+    throw error;
+  }
 }
-
-export function __resetResultStoreForTests() {
-  byResultId.clear();
-  byIdempotencyKey.clear();
-  inFlight.clear();
-}
-
-export type { StoredResult };

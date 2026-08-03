@@ -213,6 +213,11 @@ export function SellerJourney() {
               Math.ceil(seconds / 60),
             )} minute${seconds > 90 ? "s" : ""}.`,
             nextStep: "Try again shortly.",
+            // The generic unavailable state is `retryable: true`, which renders a
+            // "Try again" button. Offering an immediate retry to someone who has
+            // just been throttled contradicts the copy and guarantees a second
+            // 429, so the affordance is withheld until the window has passed.
+            retryable: false,
           })
           setPhase("outcome")
           return

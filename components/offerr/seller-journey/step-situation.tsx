@@ -14,7 +14,7 @@
  */
 
 import { useState } from "react"
-import { Field, GhostButton, OptionGroup, PrimaryButton, StepShell, inputClass } from "./journey-chrome"
+import { Field, GhostButton, OptionGroup, PrimaryButton, StepShell, inputClass, describedBy } from "./journey-chrome"
 import type { JourneyDraft } from "./journey"
 import { track } from "@/lib/offerr/analytics"
 
@@ -82,6 +82,7 @@ export function StepSituation({
           </span>
           <input
             id="offerr-asking"
+            aria-describedby={describedBy("offerr-asking", { hasHint: true })}
             type="number"
             inputMode="numeric"
             min={0}

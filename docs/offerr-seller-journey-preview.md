@@ -86,7 +86,13 @@ probe the configuration.
 | `OFFERR_SESSION_SECRET` | yes | HMAC key. Unset ⇒ the surface throws rather than issue forgeable sessions. |
 | `OFFERR_INTERNAL_API_BASE` | for real evaluation | e.g. the rei-automation preview URL. |
 | `OFFERR_INTERNAL_API_SECRET` | for real evaluation | Server-only. Never sent to a browser. |
-| `OFFERR_PREVIEW_SYNTHETIC_EVALUATOR` | no | Preview-only outcome simulator. Ignored in production. |
+| `OFFERR_INTERNAL_TIMEOUT_MS` | no | Upstream deadline; defaults to 20 000. |
+| `OFFERR_PREVIEW_STATE_DATABASE_URL` | **yes when deployed** | Postgres holding `offerr_preview.*`. Absent on a deployment ⇒ the surface fails closed rather than using per-instance state. |
+| `OFFERR_PREVIEW_STATE_CA_CERT` | no | Inline PEM overriding the pinned Supabase root, if that root rotates. |
+| `OFFERR_PREVIEW_SYNTHETIC_EVALUATOR` | no | Test fixture only. Ignored in production, and ignored entirely once `OFFERR_INTERNAL_API_BASE` is set. |
+
+None of these are `NEXT_PUBLIC_*`; none reach the browser. The client bundle is
+asserted free of every one of these names as part of the build check.
 
 Entry URL: `/api/offerr/access?token=<token>` → redirects to `/offerr/start`.
 
@@ -237,25 +243,63 @@ build so these server modules run under the plain Node test runner.
 
 ---
 
-## 10. Known limitations (must be closed before launch)
+## 10. Distributed state
 
-1. **Rate limiting and the result store are in-process.** Per-instance and
-   non-durable on serverless. Move to a shared atomic store (Upstash Redis or
-   equivalent) and pair with Vercel BotID / WAF rate rules.
-2. **The synthetic evaluator must be removed** (or permanently disabled) before
-   any real seller traffic. It exists so the outcome matrix could be verified
-   without enabling the engine anywhere.
-3. **Mobile rendering was verified structurally, not at a real 390px viewport** —
-   the automation environment could not resize the viewport. Verify on a device
-   or a real preview deployment before launch.
-4. **Reduced motion is implemented and code-verified**, but was not exercised
-   under browser emulation.
-5. No durable persistence of seller submissions in this app — results live only
-   for the session TTL (30 min).
-6. Contact capture is inert by design; a real contact model, consent record and
+Rate limiting, the per-property cooldown, idempotency single-flight and the
+seller-safe result store are **not** in-process. They are rows in Postgres
+behind atomic SQL functions in the `offerr_preview` schema
+(`supabase/offerr-preview-state.sql`), reached only by a server-side connection
+holding the database credential — the schema is deliberately not exposed
+through PostgREST, so nothing here is reachable over the public REST API with
+any key.
+
+| Concern | Mechanism | Guarantee |
+|---|---|---|
+| Rate limits | `rate_consume()` — `INSERT .. ON CONFLICT DO UPDATE` | Row lock serializes concurrent callers; the count is exact |
+| Cooldown | `cooldown_check()` / `cooldown_mark()` | Per (session, submission fingerprint); no address in the key |
+| Idempotency | `reserve()` — reservation written *before* the upstream call | Exactly one winner per key across instances; losers wait |
+| Crash safety | Reservation lease | A dead instance's key is reclaimable, not wedged until TTL |
+| Results | `read_result()` — session id checked in SQL | Cross-session read is `not_found`, indistinguishable from missing |
+| Retryable failures | `release()` | A failure the seller is told to retry never occupies the key |
+
+Verified against real Postgres in `tests/offerr/distributed-state.test.ts`
+(independent connections standing in for separate instances). Store failure
+**fails closed**: an unreachable limiter refuses rather than silently ceasing to
+limit.
+
+`OFFERR_PREVIEW_STATE_DATABASE_URL` is required in any deployed environment.
+Without it the app refuses to start the surface rather than falling back to
+per-instance counters. The in-memory implementation exists only for `next dev`
+and the hermetic unit suite.
+
+TLS verification stays **on**: Supabase signs database endpoints with its own
+private CA, so the Supabase Root 2021 CA is pinned in `lib/offerr/supabase-ca.ts`
+rather than disabling certificate checks on a connection that carries the
+database credential.
+
+**Preview-only vs production.** The schema itself is production-shaped
+(atomic, RLS-denied, TTL-swept). What is preview-only is its *location*: it
+currently lives on a Supabase preview branch of `real-estate-automation`. Before
+launch OfferrAI should own its own database; no code change is required, only a
+different `OFFERR_PREVIEW_STATE_DATABASE_URL`.
+
+---
+
+## 10a. Known limitations (must be closed before launch)
+
+1. **The synthetic evaluator is no longer the runtime.** It is a test fixture
+   adapter, selected only when no real backend is configured *and* the
+   deployment is non-production *and* the fixture flag is set. It should still
+   be deleted outright before public traffic.
+2. No durable persistence of seller submissions in this app — results live only
+   for the result TTL (30 min).
+3. Contact capture is inert by design; a real contact model, consent record and
    retention policy are still needed.
-7. No CAPTCHA / managed bot challenge.
-8. Analytics has no sink; funnel data is not yet collected anywhere.
+4. No CAPTCHA / managed bot challenge. Pair the distributed limiter with
+   Vercel BotID / WAF rate rules before launch.
+5. Analytics has no sink; funnel data is not yet collected anywhere.
+6. The state store shares a database with the backend preview branch (see
+   above); production needs its own.
 
 ---
 

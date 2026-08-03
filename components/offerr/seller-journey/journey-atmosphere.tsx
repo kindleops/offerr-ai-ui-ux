@@ -49,11 +49,14 @@ export function JourneyAtmosphere({ intensity = 1 }: { intensity?: number }) {
 
     const resize = () => {
       dpr = Math.min(window.devicePixelRatio || 1, 2)
+      // Assigning width/height clears the backing store. Under reduced motion
+      // no animation loop runs, so without an explicit repaint the canvas stays
+      // blank after a resize until the component remounts.
       canvas.width = canvas.offsetWidth * dpr
       canvas.height = canvas.offsetHeight * dpr
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      if (reduced) draw(0)
     }
-    resize()
 
     // Density scales with viewport area so a phone is not asked to composite a
     // desktop-sized particle field.
@@ -113,6 +116,10 @@ export function JourneyAtmosphere({ intensity = 1 }: { intensity?: number }) {
         ctx.shadowBlur = 0
       }
     }
+
+    // Sized here rather than at declaration: `resize` repaints under reduced
+    // motion, so it cannot run until `draw` exists.
+    resize()
 
     if (reduced) {
       // One static frame: depth without movement.

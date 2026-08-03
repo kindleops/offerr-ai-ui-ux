@@ -10,7 +10,7 @@
  */
 
 import { useState } from "react"
-import { Field, GhostButton, OptionGroup, PrimaryButton, StepShell, inputClass } from "./journey-chrome"
+import { Field, GhostButton, OptionGroup, PrimaryButton, StepShell, inputClass, describedBy } from "./journey-chrome"
 import type { JourneyDraft } from "./journey"
 import { track } from "@/lib/offerr/analytics"
 
@@ -207,6 +207,7 @@ export function StepContext({
       >
         <textarea
           id="offerr-damage"
+          aria-describedby={describedBy("offerr-damage", { hasHint: true })}
           rows={3}
           maxLength={400}
           className={`${inputClass} resize-none`}

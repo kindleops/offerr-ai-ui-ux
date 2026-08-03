@@ -122,6 +122,12 @@ export interface InternalEvaluationView {
   } | null;
   /** Short support code minted by the boundary. Never an internal request id. */
   supportCode?: string | null;
+  /**
+   * When the upstream response failed the runtime contract, the offending key
+   * NAME (never its value). Server-side diagnostics only — it is never carried
+   * into any seller-facing field.
+   */
+  contractField?: string | null;
 }
 
 function sanitizeRange(range: unknown): SellerSafeRange | null {
@@ -317,6 +323,10 @@ export function failureToSellerSafe(
         supportCode,
       });
 
+    // A backend that returned privileged fields is a regression on our side of
+    // the fence. The seller sees the same neutral unavailability as any other
+    // internal fault — never that a contract check rejected the response.
+    case 'upstream_contract_violation':
     case 'evaluation_timeout':
     case 'offerr_persistence_unavailable':
     case 'offerr_persistence_failed':

@@ -108,6 +108,33 @@ export function StepShell({
   )
 }
 
+/**
+ * Ids for a field's hint and error text, derived from the control id.
+ *
+ * These used to come from `useId()` inside `Field` and were never exposed, so
+ * nothing referenced them and callers invented ids that did not exist in the
+ * DOM — a screen reader announced the label and nothing else. Deriving them
+ * from the control id instead means the caller and the `Field` agree without
+ * having to pass values back and forth, and the id an input points at is
+ * guaranteed to be the one that renders.
+ */
+export function fieldIds(controlId: string) {
+  return { hintId: `${controlId}-hint`, errorId: `${controlId}-error` }
+}
+
+/**
+ * `aria-describedby` for a control: its error when there is one, otherwise its
+ * hint. Only ever names an element that is actually rendered — pointing at a
+ * missing id is worse than omitting the attribute, because assistive tech
+ * reports nothing and the omission is silent.
+ */
+export function describedBy(controlId: string, opts: { hasHint?: boolean; hasError?: boolean }) {
+  const { hintId, errorId } = fieldIds(controlId)
+  if (opts.hasError) return errorId
+  if (opts.hasHint) return hintId
+  return undefined
+}
+
 export function Field({
   label,
   hint,
@@ -121,12 +148,15 @@ export function Field({
   children: React.ReactNode
   htmlFor?: string
 }) {
-  const hintId = useId()
-  const errorId = useId()
+  // A field without a control id cannot be associated with anything; fall back
+  // to a generated id so the markup is still valid and unique.
+  const fallback = useId()
+  const controlId = htmlFor ?? fallback
+  const { hintId, errorId } = fieldIds(controlId)
   return (
     <div>
       <label
-        htmlFor={htmlFor}
+        htmlFor={controlId}
         className="mb-2 block text-[11px] uppercase tracking-[0.18em] text-white/45"
       >
         {label}

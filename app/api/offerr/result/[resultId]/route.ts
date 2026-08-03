@@ -15,7 +15,7 @@ import { evaluateGates } from '@/lib/offerr/preview-config';
 import { PREVIEW_TOKEN_COOKIE, SESSION_COOKIE, parseSession } from '@/lib/offerr/session';
 import { RATE_RULES, consume } from '@/lib/offerr/rate-limit';
 import { readResult } from '@/lib/offerr/result-store';
-import { logEvent } from '@/lib/offerr/safe-log';
+import { hashRef, logEvent } from '@/lib/offerr/safe-log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,7 +32,7 @@ export async function GET(
   const session = parseSession(cookieStore.get(SESSION_COOKIE)?.value);
   if (!session) return NextResponse.json({ ok: false, error: 'session_required' }, { status: 401 });
 
-  const limited = consume(`read:sid:${session.sid}`, RATE_RULES.readPerSession);
+  const limited = await consume(`read:sid:${session.sid}`, RATE_RULES.readPerSession);
   if (!limited.allowed) {
     return NextResponse.json(
       { ok: false, error: 'rate_limited', retryAfterSeconds: limited.retryAfterSeconds },
@@ -41,10 +41,13 @@ export async function GET(
   }
 
   const { resultId } = await context.params;
-  const outcome = readResult(String(resultId ?? ''), session.sid);
+  const outcome = await readResult(String(resultId ?? ''), session.sid);
 
   if (outcome.status === 'expired') {
-    logEvent('result.expired', { session_ref: session.sid.slice(0, 8) });
+    // Hashed, not truncated. A raw prefix of a live session id is credential
+    // material, and `redact()` would not catch it: the key already ends in
+    // `_ref`, which marks a value as ALREADY hashed and passes it through.
+    logEvent('result.expired', { session_ref: hashRef(session.sid) });
     return NextResponse.json({ ok: false, error: 'expired' }, { status: 410 });
   }
   if (outcome.status === 'not_found') {

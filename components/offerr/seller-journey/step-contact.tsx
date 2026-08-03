@@ -20,7 +20,7 @@
  * both meaningless.
  */
 
-import { Field, GhostButton, PrimaryButton, StepShell, inputClass } from "./journey-chrome"
+import { Field, GhostButton, PrimaryButton, StepShell, inputClass, describedBy } from "./journey-chrome"
 import type { JourneyDraft } from "./journey"
 import { track } from "@/lib/offerr/analytics"
 
@@ -78,6 +78,8 @@ export function StepContact({
       <Field label="Email" error={fieldErrors["contact.email"] ?? null} htmlFor="offerr-email">
         <input
           id="offerr-email"
+          aria-invalid={fieldErrors["contact.email"] ? true : undefined}
+          aria-describedby={describedBy("offerr-email", { hasError: Boolean(fieldErrors["contact.email"]) })}
           type="email"
           inputMode="email"
           autoComplete="email"

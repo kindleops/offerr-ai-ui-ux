@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useRef, useState } from "react"
-import { Field, GhostButton, PrimaryButton, StepShell, inputClass } from "./journey-chrome"
+import { Field, GhostButton, PrimaryButton, StepShell, inputClass, describedBy } from "./journey-chrome"
 import type { JourneyDraft } from "./journey"
 import { track } from "@/lib/offerr/analytics"
 
@@ -77,7 +77,7 @@ export function StepProperty({
           value={address}
           maxLength={240}
           aria-invalid={error ? true : undefined}
-          aria-describedby={error ? "offerr-address-error" : undefined}
+          aria-describedby={describedBy("offerr-address", { hasError: Boolean(error) })}
           onChange={(event) => update("property", { ...draft.property, address: event.target.value })}
           onBlur={() => setTouched(true)}
           onKeyDown={(event) => {
@@ -103,6 +103,7 @@ export function StepProperty({
           placeholder="Apt 4B"
           value={unit}
           maxLength={24}
+          aria-describedby={describedBy("offerr-unit", { hasHint: true })}
           onChange={(event) => update("property", { ...draft.property, unit: event.target.value })}
         />
       </Field>

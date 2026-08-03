@@ -17,6 +17,7 @@ import * as config from '../../lib/offerr/preview-config.ts';
 import * as session from '../../lib/offerr/session.ts';
 import * as rateLimit from '../../lib/offerr/rate-limit.ts';
 import * as store from '../../lib/offerr/result-store.ts';
+import * as previewStore from '../../lib/offerr/preview-store.ts';
 import { failureToSellerSafe } from '../../lib/offerr/outcomes.ts';
 
 const TOKEN = 'preview-token-abc123';
@@ -227,46 +228,61 @@ test('the idempotency key is not a reversible digest of the address', () => {
 
 /* ── Result store isolation ────────────────────────────────────────────────── */
 
+/**
+ * The store is DISTRIBUTED in every deployed environment (Postgres, atomic SQL).
+ * These unit tests drive the same interface through the in-memory
+ * implementation so they stay deterministic and need no database; the
+ * distributed guarantees themselves are proven against real Postgres in
+ * `tests/offerr/distributed-state.test.ts`.
+ */
+let mem: ReturnType<typeof previewStore.__newMemoryStoreForTests>;
+
 beforeEach(() => {
-  store.__resetResultStoreForTests();
-  rateLimit.__resetRateLimiterForTests();
+  mem = previewStore.__newMemoryStoreForTests();
+  previewStore.__setPreviewStoreForTests(mem);
 });
 
-test('a result is readable by its own session and invisible to any other', () => {
+async function seed(resultId: string, sid: string, key: string, ttlMs = 30 * 60 * 1000) {
   const result = failureToSellerSafe('insufficient_data', 'CODE1234');
-  store.putResult({ resultId: 'r-1', sid: 'owner', idempotencyKey: 'k-1', result });
+  await mem.reserve(key, sid, resultId, ttlMs, 45_000);
+  await mem.complete(key, resultId, result, ttlMs);
+  return result;
+}
 
-  const mine = store.readResult('r-1', 'owner');
-  assert.equal(mine.status, 'ok');
+test('a result is readable by its own session and invisible to any other', async () => {
+  await seed('r-1', 'owner', 'k-1');
 
-  const theirs = store.readResult('r-1', 'someone-else');
+  assert.equal((await store.readResult('r-1', 'owner')).status, 'ok');
   assert.equal(
-    theirs.status,
+    (await store.readResult('r-1', 'someone-else')).status,
     'not_found',
     'a cross-session read must be indistinguishable from a missing result',
   );
 });
 
-test('an expired result reports expired and is evicted', () => {
-  const result = failureToSellerSafe('insufficient_data', null);
-  const now = Date.now();
-  store.putResult({ resultId: 'r-2', sid: 'owner', idempotencyKey: 'k-2', result, now });
-
-  const later = now + 31 * 60 * 1000;
-  assert.equal(store.readResult('r-2', 'owner', later).status, 'expired');
-  assert.equal(store.readResult('r-2', 'owner', later).status, 'not_found');
+test('an expired result reports expired rather than returning stale data', async () => {
+  await seed('r-2', 'owner', 'k-2', 10);
+  await new Promise((r) => setTimeout(r, 25));
+  assert.equal((await store.readResult('r-2', 'owner')).status, 'expired');
 });
 
-test('an unknown result id is not_found, not an error that confirms the space', () => {
-  assert.equal(store.readResult('never-existed', 'owner').status, 'not_found');
+test('an unknown result id is not_found, not an error that confirms the space', async () => {
+  assert.equal((await store.readResult('never-existed', 'owner')).status, 'not_found');
 });
 
-test('a replay finds the stored result by idempotency key, scoped to the session', () => {
-  const result = failureToSellerSafe('insufficient_data', null);
-  store.putResult({ resultId: 'r-3', sid: 'owner', idempotencyKey: 'k-3', result });
+test('a replay finds the stored result by idempotency key, scoped to the session', async () => {
+  await seed('r-3', 'owner', 'k-3');
+  assert.ok(await store.findByIdempotencyKey('k-3', 'owner'));
+  assert.equal(await store.findByIdempotencyKey('k-3', 'intruder'), null);
+});
 
-  assert.ok(store.findByIdempotencyKey('k-3', 'owner'));
-  assert.equal(store.findByIdempotencyKey('k-3', 'intruder'), null);
+test('a pending reservation is not a result and is never replayed as one', async () => {
+  await mem.reserve('k-pending', 'owner', 'r-pending', 30 * 60 * 1000, 45_000);
+  assert.equal(
+    await store.findByIdempotencyKey('k-pending', 'owner'),
+    null,
+    'an in-flight evaluation must not be served as a finished result',
+  );
 });
 
 test('concurrent submissions of one key collapse onto a single evaluation', async () => {
@@ -274,18 +290,16 @@ test('concurrent submissions of one key collapse onto a single evaluation', asyn
   const work = async () => {
     calls += 1;
     await new Promise((r) => setTimeout(r, 25));
-    return store.putResult({
-      resultId: `r-${calls}`,
-      sid: 'owner',
-      idempotencyKey: 'k-concurrent',
-      result: failureToSellerSafe('insufficient_data', null),
-    });
+    return { result: failureToSellerSafe('insufficient_data', null), cacheable: true };
   };
 
+  let n = 0;
+  const nextId = () => `r-conc-${(n += 1)}`;
+
   const [a, b, c] = await Promise.all([
-    store.runOnceForKey('k-concurrent', work),
-    store.runOnceForKey('k-concurrent', work),
-    store.runOnceForKey('k-concurrent', work),
+    store.runOnceForKey('k-concurrent', 'owner', nextId, work),
+    store.runOnceForKey('k-concurrent', 'owner', nextId, work),
+    store.runOnceForKey('k-concurrent', 'owner', nextId, work),
   ]);
 
   assert.equal(calls, 1, 'a double submit must not create a second snapshot');
@@ -293,38 +307,75 @@ test('concurrent submissions of one key collapse onto a single evaluation', asyn
   assert.equal(b.resultId, c.resultId);
 });
 
+test('a retryable outcome is not cached, so an immediate retry re-evaluates', async () => {
+  let calls = 0;
+  const work = async () => {
+    calls += 1;
+    // `unavailable_retryable` — the state the seller is told to retry.
+    return { result: failureToSellerSafe('upstream_unavailable', null), cacheable: false };
+  };
+
+  await store.runOnceForKey('k-retry', 'owner', () => 'r-a', work);
+  assert.equal(
+    await store.findByIdempotencyKey('k-retry', 'owner'),
+    null,
+    'a failure the seller is told to retry must not occupy the idempotency key',
+  );
+
+  await store.runOnceForKey('k-retry', 'owner', () => 'r-b', work);
+  assert.equal(calls, 2, 'the retry must actually re-run the evaluation');
+});
+
 /* ── Rate limiting ─────────────────────────────────────────────────────────── */
 
-test('a session is limited after its allowance and told when to retry', () => {
+test('a session is limited after its allowance and told when to retry', async () => {
   const rule = { limit: 3, windowMs: 60_000 };
   for (let i = 0; i < 3; i += 1) {
-    assert.equal(rateLimit.consume('k', rule).allowed, true, `call ${i + 1} should pass`);
+    assert.equal((await rateLimit.consume('k', rule)).allowed, true, `call ${i + 1} should pass`);
   }
-  const blocked = rateLimit.consume('k', rule);
+  const blocked = await rateLimit.consume('k', rule);
   assert.equal(blocked.allowed, false);
   assert.ok(blocked.retryAfterSeconds > 0);
 });
 
-test('the window resets so a limit is temporary, not permanent', () => {
-  const rule = { limit: 1, windowMs: 1_000 };
-  const now = Date.now();
-  assert.equal(rateLimit.consume('k2', rule, now).allowed, true);
-  assert.equal(rateLimit.consume('k2', rule, now).allowed, false);
-  assert.equal(rateLimit.consume('k2', rule, now + 1_500).allowed, true);
+test('the window resets so a limit is temporary, not permanent', async () => {
+  const rule = { limit: 1, windowMs: 40 };
+  assert.equal((await rateLimit.consume('k2', rule)).allowed, true);
+  assert.equal((await rateLimit.consume('k2', rule)).allowed, false);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal((await rateLimit.consume('k2', rule)).allowed, true);
 });
 
-test('a per-property cooldown applies to a repeat evaluation of the same property', () => {
-  const now = Date.now();
-  assert.equal(rateLimit.checkPropertyCooldown('sid', 'fp', now).allowed, true);
-  rateLimit.markPropertyEvaluated('sid', 'fp', now);
-  assert.equal(rateLimit.checkPropertyCooldown('sid', 'fp', now + 1_000).allowed, false);
+test('a per-property cooldown applies to a repeat evaluation of the same property', async () => {
+  assert.equal((await rateLimit.checkPropertyCooldown('sid', 'fp')).allowed, true);
+  await rateLimit.markPropertyEvaluated('sid', 'fp');
+  assert.equal((await rateLimit.checkPropertyCooldown('sid', 'fp')).allowed, false);
   // Another session is unaffected.
-  assert.equal(rateLimit.checkPropertyCooldown('other-sid', 'fp', now + 1_000).allowed, true);
-  // And it lapses.
+  assert.equal((await rateLimit.checkPropertyCooldown('other-sid', 'fp')).allowed, true);
+});
+
+test('rate limiting fails CLOSED when the store is unreachable', async () => {
+  previewStore.__setPreviewStoreForTests({
+    kind: 'postgres',
+    durable: true,
+    consume: async () => { throw new previewStore.StoreUnavailableError(); },
+    cooldownCheck: async () => { throw new previewStore.StoreUnavailableError(); },
+    cooldownMark: async () => {},
+    reserve: async () => { throw new previewStore.StoreUnavailableError(); },
+    complete: async () => {},
+    release: async () => {},
+    findByKey: async () => { throw new previewStore.StoreUnavailableError(); },
+    readResult: async () => { throw new previewStore.StoreUnavailableError(); },
+    healthy: async () => false,
+  });
+
+  const decision = await rateLimit.consume('anything', { limit: 100, windowMs: 60_000 });
   assert.equal(
-    rateLimit.checkPropertyCooldown('sid', 'fp', now + rateLimit.PROPERTY_COOLDOWN_MS + 1).allowed,
-    true,
+    decision.allowed,
+    false,
+    'an unreachable limiter must refuse, never silently stop limiting',
   );
+  assert.ok(decision.retryAfterSeconds > 0);
 });
 
 test('the client IP is hashed, never stored raw', () => {
