@@ -131,6 +131,8 @@ async function attempt(
           // Server-to-server only. This header never exists in a browser request.
           'x-internal-api-secret': config.secret,
           'x-correlation-id': request.correlationId,
+          // Only present when the backend is a protected preview deployment.
+          ...(config.bypassToken ? { 'x-vercel-protection-bypass': config.bypassToken } : {}),
         },
         // Only approved seller input crosses. No session id, no cookie, no
         // contact details, no client IP.

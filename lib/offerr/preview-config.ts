@@ -140,5 +140,14 @@ export function internalEvaluationConfig() {
      */
     syntheticEnabled: isTrue('OFFERR_PREVIEW_SYNTHETIC_EVALUATOR') && !isProductionDeployment(),
     timeoutMs: Number(env('OFFERR_INTERNAL_TIMEOUT_MS') || 20_000),
+    /**
+     * Vercel Deployment Protection bypass for the BACKEND preview.
+     *
+     * The backend preview sits behind Vercel SSO, which answers 401 to
+     * server-to-server calls. This token is the documented automation bypass.
+     * It is refused on a production deployment: production must reach a real
+     * unprotected backend, never a protected preview via a side door.
+     */
+    bypassToken: isProductionDeployment() ? '' : env('OFFERR_INTERNAL_BYPASS_TOKEN'),
   };
 }
