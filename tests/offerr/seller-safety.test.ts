@@ -329,3 +329,71 @@ test('a unit is folded into the address in a form the internal parser understand
     '500 Main St, Dallas, TX 75201',
   );
 });
+
+/* ── Mobile input sizing ────────────────────────────────────────────────────── */
+
+test('seller controls stay at 16px or larger, so iOS does not zoom on focus', async () => {
+  // Asserted against the SOURCE rather than a rendered tree: the shared control
+  // class is a plain string, and importing the client component here would drag
+  // React and JSX into a hermetic node suite for no extra confidence.
+  //
+  // Below 16px, iOS Safari zooms the viewport when a text/number/select/textarea
+  // control receives focus, reflowing the page out from under a seller who is
+  // mid-form. This was measured at 15px on every mobile viewport before the fix.
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(
+    new URL('../../components/offerr/seller-journey/journey-chrome.tsx', import.meta.url),
+    'utf8',
+  );
+
+  const declaration = source.slice(source.indexOf('export const inputClass'));
+  const body = declaration.slice(0, declaration.indexOf('\n\n'));
+
+  const sizes = [...body.matchAll(/text-\[(\d+(?:\.\d+)?)px\]/g)].map((m) => Number(m[1]));
+  assert.ok(sizes.length > 0, 'inputClass must declare an explicit font size');
+  for (const px of sizes) {
+    assert.ok(px >= 16, `seller control font size ${px}px would trigger iOS focus zoom`);
+  }
+
+  // A responsive variant could reintroduce a sub-16px size on a breakpoint that
+  // is never tested. Catch that at the source.
+  const responsiveSmaller = [...body.matchAll(/(?:sm|md|lg|xl):text-\[(\d+(?:\.\d+)?)px\]/g)]
+    .map((m) => Number(m[1]))
+    .filter((px) => px < 16);
+  assert.deepEqual(responsiveSmaller, [], 'a breakpoint override must not drop below 16px');
+});
+
+test('every enum value a seller can pick has a human label on the review screen', async () => {
+  // Guards a whole class of quiet regression: renaming a schema value without
+  // the matching LABELS entry makes the review step fall back to the raw enum,
+  // so the seller confirms "90_days_plus" instead of "90 days or more". It
+  // renders, it does not throw, and only a human looking at the screen notices.
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(
+    new URL('../../components/offerr/seller-journey/step-review.tsx', import.meta.url),
+    'utf8',
+  );
+  const labels = source.slice(source.indexOf('const LABELS'));
+  const labelled = new Set(
+    [...labels.slice(0, labels.indexOf('\n}')).matchAll(/(?:^|\s|")([a-z0-9_]+)"?\s*:/gm)].map((m) => m[1]),
+  );
+
+  const shape = intakeSubmissionSchema.shape;
+  const enumsToCheck: Array<[string, readonly string[]]> = [
+    ['propertyType', (shape.context as never as { shape: Record<string, { options: string[] }> }).shape.propertyType.options],
+    ['occupancy', (shape.context as never as { shape: Record<string, { options: string[] }> }).shape.occupancy.options],
+    ['condition', (shape.context as never as { shape: Record<string, { options: string[] }> }).shape.condition.options],
+    ['repairLevel', (shape.context as never as { shape: Record<string, { options: string[] }> }).shape.repairLevel.options],
+    ['timeline', (shape.situation as never as { shape: Record<string, { options: string[] }> }).shape.timeline.options],
+    ['decisionMaker', (shape.situation as never as { shape: Record<string, { options: string[] }> }).shape.decisionMaker.options],
+  ];
+
+  for (const [field, options] of enumsToCheck) {
+    for (const option of options) {
+      assert.ok(
+        labelled.has(option),
+        `${field} value "${option}" has no LABELS entry — the review screen would show the raw enum`,
+      );
+    }
+  }
+});
