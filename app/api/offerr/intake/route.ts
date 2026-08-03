@@ -58,6 +58,7 @@ import { findByIdempotencyKey, runOnceForKey } from '@/lib/offerr/result-store';
 import { evaluateUpstream } from '@/lib/offerr/evaluation-client';
 import { failureToSellerSafe, toSellerSafeResult } from '@/lib/offerr/outcomes';
 import { assertSellerSafe } from '@/lib/offerr/upstream-contract';
+import { assertSellerFactsAccepted } from '@/lib/offerr/seller-facts-contract';
 import { addressLogRef, hashRef, logEvent } from '@/lib/offerr/safe-log';
 
 export const runtime = 'nodejs';
@@ -182,6 +183,26 @@ export async function POST(request: Request) {
   // ── Idempotency, derived SERVER-SIDE from session + submission ──────────
   const address = composeAddress(submission.property);
   const sellerFacts = toSellerFacts(submission);
+
+  // ── Outbound contract gate ───────────────────────────────────────────────
+  // The spine validates `seller_facts` FAIL-CLOSED: one unrecognised key fails
+  // the entire submission, permanently. When that happened it surfaced to the
+  // seller as a retryable "unavailable" — an invitation to retry something no
+  // retry could ever fix.
+  //
+  // This check makes a translation regression OUR fault, visibly, before the
+  // network hop and before any rate-limit or cooldown budget is spent. It can
+  // only fire on a code defect, never on seller input: every value here comes
+  // from a closed enum the form already validated.
+  const contract = assertSellerFactsAccepted(sellerFacts);
+  if (!contract.ok) {
+    logEvent('intake.outbound_contract_drift', {
+      correlation_id: correlationId,
+      // Key names and error codes only — never a seller's answer.
+      errors: contract.errors,
+    });
+    return refuse(503, 'evaluation_unavailable', { supportCode: supportCode(correlationId) });
+  }
   const fingerprint = submissionFingerprint({
     normalizedAddress: address,
     unit: submission.property.unit,

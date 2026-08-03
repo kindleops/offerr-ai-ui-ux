@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useRef, useState } from "react"
-import { Field, GhostButton, PrimaryButton, StepShell, inputClass, describedBy } from "./journey-chrome"
+import { Field, PrimaryButton, StepShell, inputClass, describedBy } from "./journey-chrome"
 import type { JourneyDraft } from "./journey"
 import { track } from "@/lib/offerr/analytics"
 

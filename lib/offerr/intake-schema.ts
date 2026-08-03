@@ -16,6 +16,15 @@
 
 import { z } from 'zod';
 
+import {
+  BACKEND_CONDITION_VALUES,
+  BACKEND_REPAIR_LEVELS,
+  BACKEND_TIMELINE_VALUES,
+  UI_OCCUPANCY_VALUES,
+  UI_REPAIRS_NOTES_MAX,
+  type OutboundSellerFacts,
+} from './seller-facts-contract.ts';
+
 /** Matches the internal spine's own bound so we reject before the network hop. */
 export const MAX_ADDRESS_LENGTH = 240;
 export const MAX_REQUEST_BYTES = 16 * 1024;
@@ -28,15 +37,21 @@ export const propertyStepSchema = z.object({
 });
 
 export const contextStepSchema = z.object({
+  // `propertyType` has no spine contract and is never forwarded; it exists for
+  // the operator review summary. The remaining four are the spine's own enums,
+  // imported rather than restated so the form cannot drift away from what the
+  // evaluation engine will accept.
   propertyType: z.enum(['single_family', 'condo', 'townhouse', 'multi_family_2_4', 'other']),
-  occupancy: z.enum(['owner_occupied', 'tenant_occupied', 'vacant']),
-  condition: z.enum(['excellent', 'good', 'fair', 'poor']),
-  repairLevel: z.enum(['none', 'cosmetic', 'moderate', 'major']),
+  occupancy: z.enum(UI_OCCUPANCY_VALUES),
+  condition: z.enum(BACKEND_CONDITION_VALUES),
+  repairLevel: z.enum(BACKEND_REPAIR_LEVELS),
   bedrooms: z.coerce.number().int().min(0).max(20).optional(),
   bathrooms: z.coerce.number().min(0).max(20).optional(),
   units: z.coerce.number().int().min(1).max(4).optional(),
   majorUpdates: z.array(z.enum(['roof', 'hvac', 'kitchen', 'bath', 'windows', 'electrical', 'plumbing'])).max(7).optional(),
-  knownDamage: trimmed(400).optional().or(z.literal('')),
+  // Bounded BELOW the spine's own notes limit so an over-long note is a
+  // correctable form message rather than a failed evaluation.
+  knownDamage: trimmed(UI_REPAIRS_NOTES_MAX).optional().or(z.literal('')),
 });
 
 export const situationStepSchema = z.object({
@@ -49,7 +64,7 @@ export const situationStepSchema = z.object({
    * removes the translation, and with it the chance of misrepresenting a
    * seller to the engine.
    */
-  timeline: z.enum(['asap', '30_days', '60_days', '90_days_plus', 'exploring']),
+  timeline: z.enum(BACKEND_TIMELINE_VALUES),
   askingPrice: z.coerce.number().min(0).max(100_000_000).optional(),
   reason: z.enum(['relocation', 'inherited', 'financial', 'tired_of_managing', 'downsizing', 'other', 'prefer_not_to_say']).optional(),
   isListed: z.boolean(),
@@ -96,7 +111,7 @@ export type IntakeSubmission = z.infer<typeof intakeSubmissionSchema>;
  * EXCLUDED: the evaluation does not use them, and forwarding PII that has no
  * effect on the result would be collecting exposure for nothing.
  */
-export function toSellerFacts(submission: IntakeSubmission) {
+export function toSellerFacts(submission: IntakeSubmission): OutboundSellerFacts {
   const { context, situation } = submission;
   const notes = String(context.knownDamage ?? '').trim();
 
