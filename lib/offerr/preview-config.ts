@@ -149,5 +149,11 @@ export function internalEvaluationConfig() {
      * unprotected backend, never a protected preview via a side door.
      */
     bypassToken: isProductionDeployment() ? '' : env('OFFERR_INTERNAL_BYPASS_TOKEN'),
+    /**
+     * Exact hostname the adapter is permitted to call. When set, a changed or
+     * injected `OFFERR_INTERNAL_API_BASE` is refused rather than followed —
+     * an env-var mistake becomes a refusal, not a credential disclosure.
+     */
+    allowedHost: env('OFFERR_INTERNAL_API_ALLOWED_HOST'),
   };
 }

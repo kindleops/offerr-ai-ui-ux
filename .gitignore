@@ -20,3 +20,4 @@ next-env.d.ts
 # pnpm 10 scaffolds this with a placeholder; a workspace file at the root also
 # makes Vercel treat this single app as a monorepo.
 pnpm-workspace.yaml
+supabase/.temp/

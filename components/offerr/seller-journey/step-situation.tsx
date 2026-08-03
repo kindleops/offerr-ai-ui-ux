@@ -65,9 +65,10 @@ export function StepSituation({
         onChange={(v) => set("timeline", v)}
         options={[
           { value: "asap", label: "As soon as possible" },
-          { value: "within_30_days", label: "Within 30 days" },
-          { value: "within_90_days", label: "Within 90 days" },
-          { value: "just_exploring", label: "Just exploring" },
+          { value: "30_days", label: "Within 30 days" },
+          { value: "60_days", label: "Within 60 days" },
+          { value: "90_days_plus", label: "90 days or more" },
+          { value: "exploring", label: "Just exploring" },
         ]}
       />
 

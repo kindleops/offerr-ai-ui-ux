@@ -176,8 +176,19 @@ export function Field({
   )
 }
 
+/**
+ * Shared control styling.
+ *
+ * The font size is 16px on mobile and 15px from `sm` up, and the 16px is not a
+ * taste decision: iOS Safari zooms the viewport when a text, number, select or
+ * textarea control smaller than 16px receives focus. The seller is mid-form
+ * when that happens, so the page jumps, the layout reflows and the field they
+ * just tapped moves out from under their thumb. Desktop typography is left at
+ * 15px — the zoom behaviour does not exist there, so inflating it would change
+ * the design for no reason.
+ */
 export const inputClass =
-  "w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3.5 text-[15px] text-white " +
+  "w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3.5 text-[16px] sm:text-[15px] text-white " +
   "placeholder:text-white/25 outline-none transition-all " +
   "focus-visible:border-neon/50 focus-visible:ring-2 focus-visible:ring-neon/30 " +
   "focus-visible:shadow-[0_0_24px_rgba(0,228,255,0.15)]"

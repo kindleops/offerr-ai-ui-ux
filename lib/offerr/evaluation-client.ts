@@ -27,6 +27,8 @@
 
 import 'server-only';
 
+import { getVercelOidcToken } from '@vercel/oidc';
+
 import { internalEvaluationConfig, isProductionDeployment } from './preview-config.ts';
 import type { InternalEvaluationView } from './outcomes.ts';
 import { parseUpstreamEnvelope } from './upstream-contract.ts';
@@ -92,21 +94,57 @@ function normalizeFailureCode(raw: unknown): string {
 }
 
 /**
- * Transport security. A secret-bearing request must not leave the process over
- * plaintext. `localhost` is exempted so the suite can run against a local
- * backend, and only when this is not a deployed environment.
+ * Hosts that must never receive a request from this adapter, whatever the
+ * configuration says. A misconfigured base URL should fail loudly rather than
+ * ship the internal secret somewhere it does not belong.
  */
-function transportAllowed(baseUrl: string): boolean {
+const DENIED_HOST_PATTERNS: RegExp[] = [
+  /\.supabase\.co$/i, // the database, never an evaluation endpoint
+  /\.supabase\.in$/i,
+  /^localhost$/i,
+  /^127\./,
+  /^\[?::1\]?$/,
+  /^0\.0\.0\.0$/,
+  /\.internal$/i,
+  /^169\.254\./, // link-local / cloud metadata
+];
+
+/**
+ * Transport security and host allowlist.
+ *
+ * A secret-bearing request must not leave the process over plaintext, and it
+ * must not go to a host that merely *looks* configured. `OFFERR_INTERNAL_API_ALLOWED_HOST`
+ * pins the exact expected hostname; when set, anything else is refused even if
+ * `OFFERR_INTERNAL_API_BASE` was changed. That turns an env-var mistake — or an
+ * injected value — into a refusal rather than a credential disclosure.
+ *
+ * `localhost` stays reachable for the local suite, and only when this is not a
+ * deployed environment.
+ */
+export function transportAllowed(baseUrl: string, allowedHost = ''): boolean {
   let url: URL;
   try {
     url = new URL(baseUrl);
   } catch {
     return false;
   }
-  if (url.protocol === 'https:') return true;
+
+  const host = url.hostname;
+  const deployed = Boolean(process.env.VERCEL) || isProductionDeployment();
+
+  // Explicit pin wins over every other consideration.
+  const pinned = String(allowedHost ?? '').trim().toLowerCase();
+  if (pinned && host.toLowerCase() !== pinned) return false;
+
+  if (url.protocol === 'https:') {
+    // A deployed adapter may never talk to a loopback or metadata address.
+    if (deployed && DENIED_HOST_PATTERNS.some((p) => p.test(host))) return false;
+    return true;
+  }
+
   if (url.protocol !== 'http:') return false;
-  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1';
-  return local && !isProductionDeployment() && !process.env.VERCEL;
+  const local = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return local && !deployed;
 }
 
 interface AttemptResult {
@@ -121,14 +159,32 @@ async function attempt(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
-  // Vercel accepts the Deployment Protection bypass as a header OR a query
-  // parameter, and which one is honoured varies by how the request reaches the
-  // edge. Sending both is the reliable form; neither is present unless the
-  // backend is a protected preview.
-  const target = new URL(`${config.baseUrl.replace(/\/+$/, '')}/api/internal/offerr/evaluations`);
-  if (config.bypassToken) {
-    target.searchParams.set('x-vercel-protection-bypass', config.bypassToken);
+  // Vercel Trusted Sources: the calling project forwards its short-lived OIDC
+  // token and the destination verifies it against its trusted-source list. This
+  // is the credential we WANT to be authenticating with — it is scoped to this
+  // project and environment and expires in an hour, unlike a static bypass
+  // secret. It is attached whenever the runtime can mint one, so the adapter
+  // starts using it the moment Trusted Sources is configured on the backend,
+  // with no code change. Never logged, never returned, never sent anywhere but
+  // the allowlisted host.
+  let oidcToken = '';
+  try {
+    oidcToken = (await getVercelOidcToken()) ?? '';
+  } catch {
+    // No OIDC in this runtime (local, or federation disabled). The bypass
+    // header below still authenticates the hop.
+    oidcToken = '';
   }
+
+  // The bypass travels ONLY as a header. Vercel also accepts it as a query
+  // parameter, but that form makes the edge answer with a redirect to strip the
+  // parameter and set a cookie — and with `redirect: 'error'` (which we keep,
+  // so a credential is never replayed to another host) the fetch throws AFTER
+  // the backend has already processed the request. That produced a phantom
+  // failure: a real evaluation persisted upstream while the seller was told the
+  // system was unavailable. A credential also has no business in a URL, where
+  // it lands in access logs.
+  const target = `${config.baseUrl.replace(/\/+$/, '')}/api/internal/offerr/evaluations`;
 
   try {
     const response = await fetch(
@@ -140,7 +196,9 @@ async function attempt(
           // Server-to-server only. This header never exists in a browser request.
           'x-internal-api-secret': config.secret,
           'x-correlation-id': request.correlationId,
-          // Only present when the backend is a protected preview deployment.
+          // Vercel Trusted Sources — preferred. Scoped and short-lived.
+          ...(oidcToken ? { 'x-vercel-trusted-oidc-idp-token': oidcToken } : {}),
+          // Automation bypass — only when the backend is a protected preview.
           ...(config.bypassToken ? { 'x-vercel-protection-bypass': config.bypassToken } : {}),
         },
         // Only approved seller input crosses. No session id, no cookie, no
@@ -174,7 +232,12 @@ async function attempt(
     const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
 
     if (!response.ok || !payload || payload.ok !== true) {
-      const failureCode = normalizeFailureCode(payload?.failure_code);
+      // The route reports engine failures in `failure_code` but VALIDATION
+      // failures in `error` (with `validation_errors`). Reading only the former
+      // turned a precise 400 into a generic "unavailable", which is how a
+      // seller-facts contract mismatch stayed invisible: the seller was told to
+      // retry a submission the backend would reject identically every time.
+      const failureCode = normalizeFailureCode(payload?.failure_code ?? payload?.error);
       const retryable = RETRYABLE_STATUS.has(response.status) || RETRYABLE_FAILURE_CODES.has(failureCode);
       return { view: { ok: false, failureCode }, retryable };
     }
@@ -223,7 +286,7 @@ export async function evaluateUpstream(request: UpstreamRequest): Promise<Intern
   const config = internalEvaluationConfig();
 
   if (config.baseUrl && config.secret) {
-    if (!transportAllowed(config.baseUrl)) {
+    if (!transportAllowed(config.baseUrl, config.allowedHost)) {
       // Refuse to send the secret rather than downgrade the transport.
       return { ok: false, failureCode: 'upstream_unavailable' };
     }

@@ -24,6 +24,7 @@ import {
 import {
   composeAddress,
   intakeSubmissionSchema,
+  toFingerprintFacts,
   toSellerFacts,
 } from '../../lib/offerr/intake-schema.ts';
 
@@ -37,7 +38,7 @@ const VALID_SUBMISSION = {
     condition: 'good',
     repairLevel: 'cosmetic',
   },
-  situation: { timeline: 'within_30_days', isListed: false, decisionMaker: 'yes' },
+  situation: { timeline: '30_days', isListed: false, decisionMaker: 'yes' },
   consent: { evaluationConsent: true },
 };
 
@@ -249,23 +250,73 @@ test('contact details are never forwarded to the evaluation service', () => {
   }
 });
 
-test('every seller fact is tagged as an unverified claim', () => {
+test('only the spine\'s five contract keys are forwarded', () => {
   const parsed = intakeSubmissionSchema.parse(VALID_SUBMISSION);
-  for (const [key, value] of Object.entries(toSellerFacts(parsed))) {
-    assert.equal(
-      (value as { source?: string }).source,
-      'seller_claim',
-      `${key} is not marked as a seller claim`,
-    );
+  const facts = toSellerFacts(parsed);
+  const allowed = ['condition', 'occupancy', 'repairs', 'timeline', 'asking_price'];
+  for (const key of Object.keys(facts)) {
+    assert.ok(allowed.includes(key), `"${key}" is not in the spine's seller-facts contract`);
+  }
+  // The spine validates fail-closed on unknown keys, so an extra field does not
+  // enrich the evaluation — it rejects the entire submission.
+  assert.ok(!('property_type' in facts));
+  assert.ok(!('bedrooms' in facts));
+  assert.ok(!('is_listed' in facts));
+  assert.ok(!('decision_maker' in facts));
+});
+
+test('seller facts are raw values, not double-wrapped claim envelopes', () => {
+  const parsed = intakeSubmissionSchema.parse(VALID_SUBMISSION);
+  const facts = toSellerFacts(parsed) as Record<string, unknown>;
+  // The spine wraps each value itself ({ source: 'seller_claimed', verified:
+  // false, received_at }). Wrapping here produced a double envelope it could
+  // not read, and every submission was rejected as invalid intake.
+  assert.equal(typeof facts.condition, 'string');
+  assert.equal(typeof facts.timeline, 'string');
+  assert.equal((facts.repairs as { level?: string })?.level, parsed.context.repairLevel);
+  assert.ok(!('value' in (facts as { value?: unknown })));
+});
+
+test('the timeline vocabulary matches the spine exactly, with no translation', () => {
+  // A translated vocabulary let a seller's answer arrive meaning something
+  // subtly different ('within 90 days' is not '90 days or more').
+  const canonical = ['asap', '30_days', '60_days', '90_days_plus', 'exploring'];
+  for (const timeline of canonical) {
+    const parsed = intakeSubmissionSchema.safeParse({
+      ...VALID_SUBMISSION,
+      situation: { ...VALID_SUBMISSION.situation, timeline },
+    });
+    assert.equal(parsed.success, true, `"${timeline}" must be accepted verbatim`);
+    if (parsed.success) assert.equal(toSellerFacts(parsed.data).timeline, timeline);
+  }
+  for (const stale of ['within_30_days', 'within_90_days', 'just_exploring']) {
+    const parsed = intakeSubmissionSchema.safeParse({
+      ...VALID_SUBMISSION,
+      situation: { ...VALID_SUBMISSION.situation, timeline: stale },
+    });
+    assert.equal(parsed.success, false, `retired value "${stale}" must be rejected`);
   }
 });
 
-test('"prefer not to say" is not forwarded upstream', () => {
+test('known damage rides in repairs.notes, the only free-text the spine accepts', () => {
   const parsed = intakeSubmissionSchema.parse({
     ...VALID_SUBMISSION,
-    situation: { ...VALID_SUBMISSION.situation, reason: 'prefer_not_to_say' },
+    context: { ...VALID_SUBMISSION.context, knownDamage: 'Roof leak over the kitchen' },
   });
-  assert.equal('reason' in toSellerFacts(parsed), false);
+  const facts = toSellerFacts(parsed);
+  assert.equal((facts.repairs as { notes?: string }).notes, 'Roof leak over the kitchen');
+});
+
+test('the fingerprint covers answers the spine never receives', () => {
+  const base = intakeSubmissionSchema.parse(VALID_SUBMISSION);
+  const changed = intakeSubmissionSchema.parse({
+    ...VALID_SUBMISSION,
+    // Not forwarded upstream — but correcting it must still re-evaluate rather
+    // than replay a stale result.
+    context: { ...VALID_SUBMISSION.context, bedrooms: 9 },
+  });
+  assert.notDeepEqual(toFingerprintFacts(base), toFingerprintFacts(changed));
+  assert.deepEqual(toSellerFacts(base), toSellerFacts(changed));
 });
 
 test('a unit is folded into the address in a form the internal parser understands', () => {

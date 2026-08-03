@@ -40,7 +40,16 @@ export const contextStepSchema = z.object({
 });
 
 export const situationStepSchema = z.object({
-  timeline: z.enum(['asap', 'within_30_days', 'within_90_days', 'just_exploring']),
+  /**
+   * The evaluation spine's canonical vocabulary, used verbatim rather than
+   * translated. An earlier version used its own labels ('within_90_days') and
+   * mapped them at the boundary, which meant a seller's answer arrived at the
+   * underwriting engine meaning something subtly different from what they
+   * clicked — 'within 90 days' is not '90 days or more'. Sharing one vocabulary
+   * removes the translation, and with it the chance of misrepresenting a
+   * seller to the engine.
+   */
+  timeline: z.enum(['asap', '30_days', '60_days', '90_days_plus', 'exploring']),
   askingPrice: z.coerce.number().min(0).max(100_000_000).optional(),
   reason: z.enum(['relocation', 'inherited', 'financial', 'tired_of_managing', 'downsizing', 'other', 'prefer_not_to_say']).optional(),
   isListed: z.boolean(),
@@ -89,24 +98,42 @@ export type IntakeSubmission = z.infer<typeof intakeSubmissionSchema>;
  */
 export function toSellerFacts(submission: IntakeSubmission) {
   const { context, situation } = submission;
+  const notes = String(context.knownDamage ?? '').trim();
+
+  // EXACTLY the keys the evaluation spine accepts: condition, occupancy,
+  // repairs, timeline, asking_price. It validates fail-closed on anything else,
+  // so sending a richer object does not enrich the evaluation — it rejects the
+  // whole submission.
+  //
+  // Values are RAW. The spine wraps each one in its own claim envelope
+  // ({ source: 'seller_claimed', verified: false, received_at }), so wrapping
+  // them here produced a double envelope it could not read. Provenance is still
+  // recorded — upstream, where it is authoritative, rather than asserted by us.
+  //
+  // The remaining answers (property type, beds, baths, units, updates, reason,
+  // listed status, decision maker) are deliberately NOT forwarded: the spine has
+  // no contract for them. They still shape the idempotency fingerprint, so a
+  // corrected answer is a new evaluation.
   return {
-    property_type: { value: context.propertyType, source: 'seller_claim' },
-    occupancy: { value: context.occupancy, source: 'seller_claim' },
-    condition: { value: context.condition, source: 'seller_claim' },
-    repairs: { value: { level: context.repairLevel }, source: 'seller_claim' },
-    ...(context.bedrooms !== undefined ? { bedrooms: { value: context.bedrooms, source: 'seller_claim' } } : {}),
-    ...(context.bathrooms !== undefined ? { bathrooms: { value: context.bathrooms, source: 'seller_claim' } } : {}),
-    ...(context.units !== undefined ? { units: { value: context.units, source: 'seller_claim' } } : {}),
-    ...(context.majorUpdates?.length ? { major_updates: { value: context.majorUpdates, source: 'seller_claim' } } : {}),
-    ...(context.knownDamage ? { known_damage: { value: context.knownDamage, source: 'seller_claim' } } : {}),
-    timeline: { value: situation.timeline, source: 'seller_claim' },
-    ...(situation.askingPrice !== undefined ? { asking_price: { value: situation.askingPrice, source: 'seller_claim' } } : {}),
-    ...(situation.reason && situation.reason !== 'prefer_not_to_say'
-      ? { reason: { value: situation.reason, source: 'seller_claim' } }
-      : {}),
-    is_listed: { value: situation.isListed, source: 'seller_claim' },
-    decision_maker: { value: situation.decisionMaker, source: 'seller_claim' },
+    condition: context.condition,
+    occupancy: context.occupancy,
+    repairs: notes ? { level: context.repairLevel, notes } : { level: context.repairLevel },
+    timeline: situation.timeline,
+    ...(situation.askingPrice !== undefined ? { asking_price: situation.askingPrice } : {}),
   };
+}
+
+/**
+ * Everything the seller answered, for the idempotency fingerprint only.
+ *
+ * Kept separate from `toSellerFacts` on purpose: the upstream payload is
+ * narrow, but the fingerprint must cover EVERY answer. If it only covered the
+ * forwarded subset, correcting a bedroom count would produce the same key and
+ * silently replay the stale result instead of re-evaluating.
+ */
+export function toFingerprintFacts(submission: IntakeSubmission) {
+  const { context, situation } = submission;
+  return { context, situation };
 }
 
 /** Normalized address string sent upstream (unit folded in when given). */

@@ -44,6 +44,7 @@ import {
   MAX_REQUEST_BYTES,
   composeAddress,
   intakeSubmissionSchema,
+  toFingerprintFacts,
   toSellerFacts,
 } from '@/lib/offerr/intake-schema';
 import {
@@ -184,7 +185,9 @@ export async function POST(request: Request) {
   const fingerprint = submissionFingerprint({
     normalizedAddress: address,
     unit: submission.property.unit,
-    sellerFacts,
+    // EVERY answer, not just the forwarded subset — otherwise correcting a
+    // detail the spine does not receive would replay the stale result.
+    sellerFacts: toFingerprintFacts(submission),
   });
   const idempotencyKey = deriveIdempotencyKey(session.sid, fingerprint);
 
