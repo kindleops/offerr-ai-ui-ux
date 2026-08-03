@@ -43,14 +43,36 @@ export const FORBIDDEN_UPSTREAM_KEYS: readonly string[] = [
   'buyer_comp_raw', 'comp_rows', 'comp_count',
   // Buyer demand
   'buyer_entities', 'buyers', 'buyer_demand', 'buyer_id', 'buyer_name',
-  // Internal identifiers and database metadata
-  'request_id', 'evaluation_id', 'property_id', 'property_export_id',
-  'internal_property_id', 'row_id', 'db_id', 'tenant_id',
   // Internal state and provenance
   'internal_result', 'provenance', 'execution_state', 'acquisition_score',
   'acquisition_state', 'suppression', 'suppression_state', 'risk_score',
   'underwriting', 'internal_reason_code', 'reason_code', 'failure_reason',
   'timeout_stage', 'stack', 'stacktrace', 'query', 'sql',
+] as const;
+
+/**
+ * Internal identifiers and operational metadata that the internal route
+ * legitimately returns and that must NEVER reach a seller.
+ *
+ * These are STRIPPED, not treated as drift. The distinction matters: the
+ * documented envelope carries `request_id` and `evaluation_id`, so rejecting
+ * the response for containing them would mean rejecting every successful
+ * evaluation — the boundary would fail closed permanently and no seller would
+ * ever see a result. Their presence is expected; forwarding them is what would
+ * be wrong, and the allowlist projection below never does.
+ *
+ * `FORBIDDEN_UPSTREAM_KEYS` stays reserved for fields whose presence is
+ * genuinely evidence of a leak — underwriting figures, the comp corpus, buyer
+ * demand, execution state — because those have no business in a seller
+ * projection under any version of the contract.
+ *
+ * The seller's own opaque handle is the result id minted by this app, which is
+ * unrelated to any upstream identifier.
+ */
+export const STRIPPED_UPSTREAM_KEYS: readonly string[] = [
+  'request_id', 'evaluation_id', 'property_id', 'property_export_id',
+  'internal_property_id', 'row_id', 'db_id', 'tenant_id',
+  'processing_ms', 'spine_version', 'idempotent_replay', 'route',
 ] as const;
 
 const FORBIDDEN = new Set(FORBIDDEN_UPSTREAM_KEYS.map((k) => k.toLowerCase()));
@@ -169,7 +191,9 @@ export function parseUpstreamEnvelope(payload: unknown): UpstreamEnvelope | Cont
       preliminary_range: rangeOrNull(projectionSource.preliminary_range),
       next_step: str(projectionSource.next_step, 64),
       expires_at: isoOrNull(projectionSource.expires_at),
-      confidence: str(projectionSource.confidence, 40),
+      // The spine emits `confidence_label` (e.g. "LOW"); `confidence` is
+      // accepted too so a rename upstream does not silently blank the field.
+      confidence: str(projectionSource.confidence_label, 40) ?? str(projectionSource.confidence, 40),
     },
     idempotentReplay: body.idempotent_replay === true,
   };

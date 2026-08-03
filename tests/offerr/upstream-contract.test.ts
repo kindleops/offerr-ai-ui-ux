@@ -21,6 +21,7 @@ process.env.OFFERR_SESSION_SECRET ||= 'test-signing-secret-for-offerr-preview';
 
 import {
   FORBIDDEN_UPSTREAM_KEYS,
+  STRIPPED_UPSTREAM_KEYS,
   assertSellerSafe,
   findForbiddenKey,
   parseUpstreamEnvelope,
@@ -87,10 +88,56 @@ test('forbidden key matching is case-insensitive', () => {
   if (parsed.ok === false) assert.equal(parsed.field, 'MAO');
 });
 
-test('the raw request and evaluation ids never survive the boundary', () => {
-  for (const key of ['request_id', 'evaluation_id', 'property_id']) {
-    const parsed = parseUpstreamEnvelope({ ...goodPayload(), [key]: 'c0ffee' });
-    assert.equal(parsed.ok, false, `${key} must not be forwarded`);
+test('the real envelope shape — with internal ids — is ACCEPTED, not rejected', () => {
+  // Verbatim shape of a successful internal/offerr/evaluations response.
+  // Rejecting this would fail closed on every real evaluation, so the ids must
+  // be stripped rather than treated as drift.
+  const parsed = parseUpstreamEnvelope({
+    ok: true,
+    route: 'internal/offerr/evaluations',
+    request_id: '7bb6ef26-da9a-4c4b-9a94-e97e86f9f357',
+    evaluation_id: '1f5b2883-17c0-4785-bccb-728d9f75bc98',
+    idempotent_replay: false,
+    evaluation: {
+      evaluation_id: '1f5b2883-17c0-4785-bccb-728d9f75bc98',
+      spine_version: 'offerr-evaluation-spine-v1',
+      outcome: 'REVIEW_REQUIRED',
+      property: { address_line: '4100 Sandbox Clean Ln', city: 'Houston', state: 'TX', zip: '77035', property_type: 'SFR' },
+      preliminary_range: null,
+      confidence_label: 'LOW',
+      next_step: 'internal_review',
+      processing_ms: 1584,
+      assumptions: ['Preliminary range is subject to an in-person walkthrough.'],
+      binding: false,
+      preliminary: true,
+      disclaimer: 'Not an offer.',
+      data_conflicts: [],
+      expires_at: '2026-08-17T00:42:38.114Z',
+    },
+  });
+  assert.equal(parsed.ok, true, 'the documented envelope must not read as contract drift');
+});
+
+test('internal ids are STRIPPED — never present in the projected view', () => {
+  const parsed = parseUpstreamEnvelope({
+    ...goodPayload(),
+    request_id: 'REQ-SHOULD-NOT-APPEAR',
+    evaluation_id: 'EVAL-SHOULD-NOT-APPEAR',
+    evaluation: { ...goodPayload().evaluation, evaluation_id: 'EVAL-SHOULD-NOT-APPEAR', processing_ms: 1584 },
+  });
+  assert.equal(parsed.ok, true);
+  const serialized = JSON.stringify(parsed);
+  for (const leak of ['REQ-SHOULD-NOT-APPEAR', 'EVAL-SHOULD-NOT-APPEAR', 'processing_ms']) {
+    assert.ok(!serialized.includes(leak), `${leak} must not survive the projection`);
+  }
+});
+
+test('the stripped list and the forbidden list are disjoint', () => {
+  // An identifier on both lists would be simultaneously "expected" and "drift",
+  // which is how a boundary ends up rejecting every real response.
+  const forbidden = new Set(FORBIDDEN_UPSTREAM_KEYS.map((k) => k.toLowerCase()));
+  for (const key of STRIPPED_UPSTREAM_KEYS) {
+    assert.ok(!forbidden.has(key.toLowerCase()), `"${key}" cannot be both stripped and forbidden`);
   }
 });
 
