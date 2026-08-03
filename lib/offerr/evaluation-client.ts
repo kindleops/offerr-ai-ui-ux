@@ -121,9 +121,18 @@ async function attempt(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
+  // Vercel accepts the Deployment Protection bypass as a header OR a query
+  // parameter, and which one is honoured varies by how the request reaches the
+  // edge. Sending both is the reliable form; neither is present unless the
+  // backend is a protected preview.
+  const target = new URL(`${config.baseUrl.replace(/\/+$/, '')}/api/internal/offerr/evaluations`);
+  if (config.bypassToken) {
+    target.searchParams.set('x-vercel-protection-bypass', config.bypassToken);
+  }
+
   try {
     const response = await fetch(
-      `${config.baseUrl.replace(/\/+$/, '')}/api/internal/offerr/evaluations`,
+      target,
       {
         method: 'POST',
         headers: {
