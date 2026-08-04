@@ -42,7 +42,6 @@ const VALID_SUBMISSION = {
   consent: { evaluationConsent: true },
 };
 
-const ALL_OUTCOMES = Object.values(SELLER_OUTCOMES);
 
 function everyOutcomeSample(): SellerSafeResult[] {
   return [

@@ -64,5 +64,10 @@ export function logEvent(event: string, fields: Record<string, unknown> = {}) {
     ...redact(fields),
   });
   // Structured single-line JSON so Vercel log drains can parse it.
+  //
+  // This is the ONE place in server code allowed to reach stdout: every other
+  // module routes through here so redaction cannot be bypassed. `no-console` is
+  // an error everywhere else in lib/offerr and app/api for exactly that reason.
+  // eslint-disable-next-line no-console
   console.log(line);
 }

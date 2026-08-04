@@ -94,11 +94,11 @@ function Sparkline({ data, color = "#00E4FF" }: { data: number[]; color?: string
     ctx.beginPath()
     data.forEach((v, i) => {
       const x = (i / (data.length - 1)) * w, y = h - ((v - min) / range) * h * 0.8 - h * 0.1
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
+      if (i === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
     })
     ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.stroke()
     // Fill below
-    const last = data[data.length - 1]
     ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath()
     const g = ctx.createLinearGradient(0, 0, 0, h)
     g.addColorStop(0, color.replace(")", ",0.15)").replace("rgb", "rgba")); g.addColorStop(1, "rgba(0,0,0,0)")

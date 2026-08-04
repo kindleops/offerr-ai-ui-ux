@@ -74,6 +74,69 @@ export function isPublicIntakeEnabled(): boolean {
 }
 
 /**
+ * FOUR INDEPENDENT SERVER-SIDE GATES
+ * ----------------------------------
+ * Each controls one capability and NONE implies another. The property that
+ * matters is not that each can be switched off, but that switching one ON does
+ * not open any other — which is what makes a partial rollout survivable.
+ *
+ * Every one reads a server-only variable. None is `NEXT_PUBLIC_`, because a
+ * client-readable value is a display hint, not a security control: the browser
+ * can lie about it, so it can never be the thing that decides.
+ *
+ * All default FALSE. `isTrue()` requires the literal string "true", so an unset,
+ * empty, misspelled or partially-deployed value fails closed rather than being
+ * read as permission.
+ */
+
+/** Gate 2 — may this deployment call the backend evaluation service at all? */
+export function isBackendEvaluationEnabled(): boolean {
+  return isTrue('OFFERR_BACKEND_EVALUATION_ENABLED');
+}
+
+/** Gate 3 — is canary admission being enforced and accepted? */
+export function isCanaryAccessEnabled(): boolean {
+  return isTrue('OFFERR_CANARY_ACCESS_ENABLED');
+}
+
+/** Gate 4 — may an evaluation create an internal review item? */
+export function isReviewHandoffEnabled(): boolean {
+  return isTrue('OFFERR_REVIEW_HANDOFF_ENABLED');
+}
+
+export interface GateMatrix {
+  publicIntake: boolean;
+  backendEvaluation: boolean;
+  canaryAccess: boolean;
+  reviewHandoff: boolean;
+}
+
+/**
+ * The whole matrix, resolved server-side.
+ *
+ * On a production deployment every gate reads FALSE regardless of its variable.
+ * This is deliberate belt-and-braces: production must be incapable of becoming a
+ * public launch through configuration drift alone, so the hard-off is applied
+ * here as well as at the admission path.
+ */
+export function gateMatrix(): GateMatrix {
+  if (isProductionDeployment()) {
+    return {
+      publicIntake: false,
+      backendEvaluation: false,
+      canaryAccess: false,
+      reviewHandoff: false,
+    };
+  }
+  return {
+    publicIntake: isPublicIntakeEnabled(),
+    backendEvaluation: isBackendEvaluationEnabled(),
+    canaryAccess: isCanaryAccessEnabled(),
+    reviewHandoff: isReviewHandoffEnabled(),
+  };
+}
+
+/**
  * Constant-time string comparison. A plain `===` on a secret leaks its prefix
  * length through timing; the preview token is low-value but the habit is not
  * negotiable in an auth path.

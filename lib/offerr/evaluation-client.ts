@@ -32,12 +32,19 @@ import { getVercelOidcToken } from '@vercel/oidc';
 import { internalEvaluationConfig, isProductionDeployment } from './preview-config.ts';
 import type { InternalEvaluationView } from './outcomes.ts';
 import { parseUpstreamEnvelope } from './upstream-contract.ts';
+import type { OutboundSellerFacts } from './seller-facts-contract.ts';
 import { syntheticEvaluate } from './synthetic-evaluator.ts';
 
 export interface UpstreamRequest {
   address: string;
   idempotencyKey: string;
-  sellerFacts: Record<string, unknown>;
+  /**
+   * Typed to the mirrored spine contract rather than a loose record, so a field
+   * the spine has no contract for cannot be added to the outbound payload
+   * without a compile error. The runtime check in the intake route is the second
+   * layer, for values the type system cannot see.
+   */
+  sellerFacts: OutboundSellerFacts;
   correlationId: string;
 }
 

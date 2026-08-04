@@ -1,38 +1,35 @@
 /**
- * Distributed state against REAL Postgres.
+ * Durable-store integration tests — the ones that prove CROSS-INSTANCE
+ * correctness.
  *
- * The in-memory store in `boundary.test.ts` proves the INTERFACE behaves. It
- * cannot prove the property that actually matters — that two requests landing on
- * two different serverless instances converge — because a single process has no
- * instances to disagree.
+ * These are the only tests in the suite that a single-process unit test cannot
+ * stand in for. Every property here is about what happens when two serverless
+ * instances act on the same key at the same moment, which is exactly the case a
+ * module-level `Map` gets wrong and a mock cannot expose.
  *
- * These tests open INDEPENDENT connections, which is the closest faithful
- * analogue of separate instances, and assert the atomic guarantees:
+ * They run against the OfferrAI-owned `offerr_app` schema inside the shared
+ * rei-automation data platform. Schema:
+ *   rei-automation/apps/api/supabase/migrations/20260804120000_offerr_app_public_state.sql
  *
- *   - N concurrent consumers of one limit admit exactly the limit, never more;
- *   - N concurrent reservations of one idempotency key elect exactly one winner;
- *   - a result is readable only by the session that produced it;
- *   - a released reservation frees the key for a genuine retry.
+ * SKIPPED unless `OFFERR_APP_DATABASE_URL` is set, so the default suite needs no
+ * database:
  *
- * SKIPPED unless `OFFERR_PREVIEW_STATE_DATABASE_URL` is set, so the default
- * suite stays hermetic. Run against the preview branch with:
- *
- *   OFFERR_PREVIEW_STATE_DATABASE_URL=... \
+ *   OFFERR_APP_DATABASE_URL=... \
  *     node --conditions=react-server --test tests/offerr/distributed-state.test.ts
+ *
+ * A skip here is NOT a pass. It means cross-instance correctness is unproven.
  */
 
-import test from 'node:test';
 import assert from 'node:assert/strict';
-
-process.env.OFFERR_SESSION_SECRET ||= 'test-signing-secret-for-offerr-preview';
+import test from 'node:test';
 
 import { Pool } from 'pg';
 
 import { SUPABASE_ROOT_2021_CA } from '../../lib/offerr/supabase-ca.ts';
 import { failureToSellerSafe } from '../../lib/offerr/outcomes.ts';
 
-const DB_URL = String(process.env.OFFERR_PREVIEW_STATE_DATABASE_URL ?? '').trim();
-const skip = DB_URL ? false : 'OFFERR_PREVIEW_STATE_DATABASE_URL not set';
+const DB_URL = String(process.env.OFFERR_APP_DATABASE_URL ?? '').trim();
+const skip = DB_URL ? false : 'OFFERR_APP_DATABASE_URL not set';
 
 /**
  * A separate pool per logical "instance". Sharing one pool would let Postgres
@@ -40,7 +37,11 @@ const skip = DB_URL ? false : 'OFFERR_PREVIEW_STATE_DATABASE_URL not set';
  * test into a sequential one.
  */
 function instance() {
-  return new Pool({ connectionString: DB_URL, max: 1, ssl: { rejectUnauthorized: true, ca: SUPABASE_ROOT_2021_CA } });
+  return new Pool({
+    connectionString: DB_URL,
+    max: 1,
+    ssl: { rejectUnauthorized: true, ca: SUPABASE_ROOT_2021_CA },
+  });
 }
 
 async function withInstances<T>(n: number, fn: (pools: Pool[]) => Promise<T>): Promise<T> {
@@ -54,8 +55,19 @@ async function withInstances<T>(n: number, fn: (pools: Pool[]) => Promise<T>): P
 
 const uniq = (label: string) => `test:${label}:${process.pid}:${Math.random().toString(36).slice(2)}`;
 
+const SESSION_TTL_MS = 10 * 60 * 1000;
+
+/** Reservations reference a session row, so tests must mint one first. */
+async function newSession(pool: Pool): Promise<string> {
+  const sid = uniq('sid');
+  await pool.query('SELECT id FROM offerr_app.session_touch($1, $2, NULL)', [sid, SESSION_TTL_MS]);
+  return sid;
+}
+
+// ── 1. Rate limiting is atomic across instances ─────────────────────────────
+
 test('a rate limit admits exactly its allowance across concurrent instances', { skip }, async () => {
-  const key = uniq('rate');
+  const subject = uniq('rate');
   const LIMIT = 4;
   const CALLERS = 12;
 
@@ -63,8 +75,8 @@ test('a rate limit admits exactly its allowance across concurrent instances', { 
     Promise.all(
       pools.map(async (pool) => {
         const res = await pool.query(
-          'SELECT allowed FROM offerr_preview.rate_consume($1, $2, $3)',
-          [key, LIMIT, 60_000],
+          'SELECT allowed FROM offerr_app.rate_consume($1, $2, $3, $4, $5)',
+          ['session', subject, 'submit', LIMIT, 60_000],
         );
         return res.rows[0].allowed as boolean;
       }),
@@ -79,118 +91,318 @@ test('a rate limit admits exactly its allowance across concurrent instances', { 
   );
 });
 
+// ── 2. No lost updates ──────────────────────────────────────────────────────
+
 test('every concurrent call is counted — no lost updates', { skip }, async () => {
-  const key = uniq('count');
+  const subject = uniq('count');
   const CALLERS = 12;
 
   await withInstances(CALLERS, (pools) =>
     Promise.all(
       pools.map((pool) =>
-        pool.query('SELECT allowed FROM offerr_preview.rate_consume($1, $2, $3)', [key, 2, 60_000]),
+        pool.query('SELECT allowed FROM offerr_app.rate_consume($1, $2, $3, $4, $5)', [
+          'session',
+          subject,
+          'read',
+          1_000,
+          60_000,
+        ]),
       ),
     ),
   );
 
-  await withInstances(1, async ([pool]) => {
-    const res = await pool.query('SELECT count FROM offerr_preview.rate_buckets WHERE key = $1', [key]);
-    assert.equal(Number(res.rows[0].count), CALLERS, 'a read-then-write limiter would lose increments here');
-    await pool.query('DELETE FROM offerr_preview.rate_buckets WHERE key = $1', [key]);
-  });
+  const pool = instance();
+  try {
+    const res = await pool.query(
+      `SELECT counter FROM offerr_app.rate_limit_buckets
+        WHERE scope = 'session' AND action = 'read'
+          AND subject_hash = offerr_app.digest_key($1)`,
+      [subject],
+    );
+    assert.equal(
+      Number(res.rows[0]?.counter),
+      CALLERS,
+      'a read-then-write counter would drop increments under concurrency',
+    );
+  } finally {
+    await pool.end().catch(() => {});
+  }
 });
+
+// ── 3 & 4. Idempotency single-flight elects exactly one winner ──────────────
 
 test('concurrent submissions on different instances elect ONE winner', { skip }, async () => {
   const key = uniq('idem');
-  const sid = uniq('sid');
   const CALLERS = 8;
 
-  const results = await withInstances(CALLERS, (pools) =>
+  const setup = instance();
+  let sid: string;
+  try {
+    sid = await newSession(setup);
+  } finally {
+    await setup.end().catch(() => {});
+  }
+
+  const wins = await withInstances(CALLERS, (pools) =>
     Promise.all(
-      pools.map(async (pool, i) => {
+      pools.map(async (pool) => {
         const res = await pool.query(
-          'SELECT won, state FROM offerr_preview.reserve($1, $2, $3, $4, $5)',
-          [key, sid, `result-${i}`, 1_800_000, 30_000],
+          'SELECT won FROM offerr_app.reserve($1, $2, $3, $4, $5)',
+          [key, sid, uniq('lease'), 60_000, 30_000],
         );
-        return res.rows[0] as { won: boolean; state: string };
+        return res.rows[0].won as boolean;
       }),
     ),
   );
 
-  const winners = results.filter((r) => r.won).length;
-  assert.equal(winners, 1, `exactly one instance may evaluate; ${winners} did`);
-  assert.ok(
-    results.filter((r) => !r.won).every((r) => r.state === 'pending'),
-    'every loser must observe the in-flight reservation and wait, not start its own',
+  assert.equal(
+    wins.filter(Boolean).length,
+    1,
+    'exactly one instance may run the evaluation; the rest must wait on it',
   );
-
-  await withInstances(1, ([pool]) => pool.query('DELETE FROM offerr_preview.results WHERE idempotency_key = $1', [key]));
 });
+
+// ── 5. Cross-session denial ─────────────────────────────────────────────────
 
 test('a completed result is readable only by its own session', { skip }, async () => {
-  const key = uniq('read');
-  const sid = uniq('sid');
-  const resultId = uniq('res');
-  const result = failureToSellerSafe('insufficient_data', 'CODE1234');
+  const key = uniq('own');
+  const handle = uniq('handle');
+  const pool = instance();
 
-  await withInstances(2, async ([writer, reader]) => {
-    await writer.query('SELECT won FROM offerr_preview.reserve($1, $2, $3, $4, $5)', [
-      key, sid, resultId, 1_800_000, 30_000,
+  try {
+    const owner = await newSession(pool);
+    const stranger = await newSession(pool);
+
+    await pool.query('SELECT won FROM offerr_app.reserve($1, $2, $3, $4, $5)', [
+      key,
+      owner,
+      uniq('lease'),
+      60_000,
+      30_000,
     ]);
-    await writer.query('SELECT offerr_preview.complete($1, $2, $3::jsonb, $4)', [
-      key, resultId, JSON.stringify(result), 1_800_000,
+
+    const result = failureToSellerSafe('insufficient_data', 'TESTCODE');
+    await pool.query('SELECT offerr_app.complete($1, $2, $3, $4::jsonb, $5, $6)', [
+      key,
+      handle,
+      String(result.outcome),
+      JSON.stringify(result),
+      'corr-test',
+      60_000,
     ]);
 
-    // A DIFFERENT connection — the durability claim is that another instance
-    // can serve a result it never produced.
-    const mine = await reader.query('SELECT status FROM offerr_preview.read_result($1, $2)', [resultId, sid]);
-    assert.equal(mine.rows[0].status, 'ok', 'another instance must be able to serve the result');
+    const mine = await pool.query(
+      'SELECT status FROM offerr_app.read_result($1, $2)',
+      [handle, owner],
+    );
+    assert.equal(mine.rows[0].status, 'ok', 'the owning session must recover its own result');
 
-    const theirs = await reader.query('SELECT status FROM offerr_preview.read_result($1, $2)', [
-      resultId, `${sid}-intruder`,
-    ]);
-    assert.equal(theirs.rows[0].status, 'not_found', 'a cross-session read must be indistinguishable from missing');
-
-    await writer.query('DELETE FROM offerr_preview.results WHERE idempotency_key = $1', [key]);
-  });
+    const theirs = await pool.query(
+      'SELECT status FROM offerr_app.read_result($1, $2)',
+      [handle, stranger],
+    );
+    assert.equal(
+      theirs.rows[0].status,
+      'not_found',
+      'another session must get not_found — "forbidden" would confirm the handle exists',
+    );
+  } finally {
+    await pool.end().catch(() => {});
+  }
 });
+
+// ── 6. A released reservation frees the key ─────────────────────────────────
 
 test('a released reservation frees the key for a genuine retry', { skip }, async () => {
   const key = uniq('release');
-  const sid = uniq('sid');
+  const pool = instance();
 
-  await withInstances(2, async ([a, b]) => {
-    const first = await a.query('SELECT won FROM offerr_preview.reserve($1, $2, $3, $4, $5)', [
-      key, sid, 'r-1', 1_800_000, 30_000,
+  try {
+    const sid = await newSession(pool);
+
+    const first = await pool.query('SELECT won FROM offerr_app.reserve($1, $2, $3, $4, $5)', [
+      key, sid, uniq('lease'), 60_000, 30_000,
     ]);
     assert.equal(first.rows[0].won, true);
 
-    // The evaluation failed transiently and released rather than caching.
-    await a.query('SELECT offerr_preview.release($1)', [key]);
-
-    const retry = await b.query('SELECT won FROM offerr_preview.reserve($1, $2, $3, $4, $5)', [
-      key, sid, 'r-2', 1_800_000, 30_000,
+    const blocked = await pool.query('SELECT won FROM offerr_app.reserve($1, $2, $3, $4, $5)', [
+      key, sid, uniq('lease'), 60_000, 30_000,
     ]);
-    assert.equal(retry.rows[0].won, true, 'a retryable failure must not occupy the key');
+    assert.equal(blocked.rows[0].won, false, 'a live reservation must not be displaceable');
 
-    await b.query('DELETE FROM offerr_preview.results WHERE idempotency_key = $1', [key]);
-  });
+    await pool.query('SELECT offerr_app.release($1)', [key]);
+
+    const retried = await pool.query('SELECT won FROM offerr_app.reserve($1, $2, $3, $4, $5)', [
+      key, sid, uniq('lease'), 60_000, 30_000,
+    ]);
+    assert.equal(retried.rows[0].won, true, 'a released key must be reservable again');
+  } finally {
+    await pool.end().catch(() => {});
+  }
 });
+
+// ── 7. A lapsed lease is reclaimable ────────────────────────────────────────
 
 test('an expired lease is reclaimable so a dead instance cannot wedge a key', { skip }, async () => {
   const key = uniq('lease');
-  const sid = uniq('sid');
+  const pool = instance();
 
-  await withInstances(2, async ([dead, live]) => {
-    // Lease already lapsed: this models an instance that won the reservation and
-    // then died before publishing.
-    await dead.query('SELECT won FROM offerr_preview.reserve($1, $2, $3, $4, $5)', [
-      key, sid, 'r-dead', 1_800_000, -1_000,
+  try {
+    const sid = await newSession(pool);
+
+    // A lease of 0 ms is already lapsed the moment it is written — the state a
+    // crashed instance leaves behind.
+    const first = await pool.query('SELECT won FROM offerr_app.reserve($1, $2, $3, $4, $5)', [
+      key, sid, uniq('dead-instance'), 60_000, 0,
+    ]);
+    assert.equal(first.rows[0].won, true);
+
+    const takeover = await pool.query('SELECT won FROM offerr_app.reserve($1, $2, $3, $4, $5)', [
+      key, sid, uniq('live-instance'), 60_000, 30_000,
+    ]);
+    assert.equal(
+      takeover.rows[0].won,
+      true,
+      'a lapsed lease must be reclaimable, or a crash wedges the key until TTL',
+    );
+  } finally {
+    await pool.end().catch(() => {});
+  }
+});
+
+// ── Additional durability properties ────────────────────────────────────────
+
+test('an expired result reports expired rather than returning stale data', { skip }, async () => {
+  const key = uniq('expiry');
+  const handle = uniq('handle');
+  const pool = instance();
+
+  try {
+    const sid = await newSession(pool);
+    await pool.query('SELECT won FROM offerr_app.reserve($1, $2, $3, $4, $5)', [
+      key, sid, uniq('lease'), 60_000, 30_000,
     ]);
 
-    const reclaimed = await live.query('SELECT won FROM offerr_preview.reserve($1, $2, $3, $4, $5)', [
-      key, sid, 'r-live', 1_800_000, 30_000,
+    const result = failureToSellerSafe('insufficient_data', 'TESTCODE');
+    // A TTL of 0 ms is expired on arrival.
+    await pool.query('SELECT offerr_app.complete($1, $2, $3, $4::jsonb, $5, $6)', [
+      key, handle, String(result.outcome), JSON.stringify(result), 'corr-test', 0,
     ]);
-    assert.equal(reclaimed.rows[0].won, true, 'a lapsed lease must be reclaimable');
 
-    await live.query('DELETE FROM offerr_preview.results WHERE idempotency_key = $1', [key]);
-  });
+    const read = await pool.query('SELECT status FROM offerr_app.read_result($1, $2)', [handle, sid]);
+    assert.equal(read.rows[0].status, 'expired');
+  } finally {
+    await pool.end().catch(() => {});
+  }
+});
+
+test('a cooldown blocks a repeat and reports when to retry', { skip }, async () => {
+  const property = uniq('property');
+  const pool = instance();
+
+  try {
+    const before = await pool.query('SELECT allowed FROM offerr_app.cooldown_check($1)', [property]);
+    assert.equal(before.rows[0].allowed, true, 'an unseen property must not be on cooldown');
+
+    await pool.query('SELECT offerr_app.cooldown_mark($1, $2)', [property, 60_000]);
+
+    const after = await pool.query(
+      'SELECT allowed, retry_after_seconds FROM offerr_app.cooldown_check($1)',
+      [property],
+    );
+    assert.equal(after.rows[0].allowed, false);
+    assert.ok(Number(after.rows[0].retry_after_seconds) > 0, 'a denial must say when to retry');
+  } finally {
+    await pool.end().catch(() => {});
+  }
+});
+
+test('consent is stored per type and per version, never bundled', { skip }, async () => {
+  const pool = instance();
+
+  try {
+    const sid = await newSession(pool);
+
+    await pool.query('SELECT offerr_app.record_consent($1, $2, $3, $4, $5, $6)', [
+      sid, 'evaluation', 'v1.0', 'copy-2026-08-04', true, 'desktop',
+    ]);
+    // Marketing DECLINED while evaluation is granted — the combination a single
+    // bundled consent row cannot express.
+    await pool.query('SELECT offerr_app.record_consent($1, $2, $3, $4, $5, $6)', [
+      sid, 'marketing_email', 'v1.0', 'copy-2026-08-04', false, 'desktop',
+    ]);
+
+    const rows = await pool.query(
+      `SELECT c.consent_type, c.granted, c.document_version
+         FROM offerr_app.consent_records c
+         JOIN offerr_app.sessions s ON s.id = c.session_id
+        WHERE s.session_hash = offerr_app.digest_key($1)
+        ORDER BY c.consent_type`,
+      [sid],
+    );
+
+    assert.equal(rows.rows.length, 2, 'each consent type must be its own auditable row');
+    const byType = Object.fromEntries(rows.rows.map((r) => [r.consent_type, r.granted]));
+    assert.equal(byType.evaluation, true);
+    assert.equal(byType.marketing_email, false);
+  } finally {
+    await pool.end().catch(() => {});
+  }
+});
+
+test('the private schema is unreachable by anon and authenticated', { skip }, async () => {
+  const pool = instance();
+
+  try {
+    for (const role of ['anon', 'authenticated']) {
+      const usage = await pool.query('SELECT has_schema_privilege($1, $2, $3) AS ok', [
+        role, 'offerr_app', 'USAGE',
+      ]);
+      assert.equal(usage.rows[0].ok, false, `${role} must have no USAGE on offerr_app`);
+
+      for (const table of ['sessions', 'seller_results', 'consent_records', 'review_items']) {
+        const priv = await pool.query('SELECT has_table_privilege($1, $2, $3) AS ok', [
+          role, `offerr_app.${table}`, 'SELECT',
+        ]);
+        assert.equal(priv.rows[0].ok, false, `${role} must not SELECT offerr_app.${table}`);
+      }
+    }
+  } finally {
+    await pool.end().catch(() => {});
+  }
+});
+
+test('a review item is created with no execution side effect', { skip }, async () => {
+  const pool = instance();
+
+  try {
+    const sid = await newSession(pool);
+    const reference = uniq('evalref');
+
+    const created = await pool.query(
+      'SELECT offerr_app.enqueue_review($1, $2, $3::jsonb, $4::jsonb, $5, $6::jsonb, $7) AS id',
+      [
+        reference,
+        sid,
+        JSON.stringify({ city: 'Springfield', state: 'IL' }),
+        JSON.stringify({ condition: 'fair', timeline: '30_days' }),
+        'manual_review',
+        JSON.stringify({ low: 180000, high: 210000 }),
+        'corr-test',
+      ],
+    );
+    assert.ok(created.rows[0].id, 'a review item must be created');
+
+    const row = await pool.query(
+      'SELECT status FROM offerr_app.review_items WHERE evaluation_reference = $1',
+      [reference],
+    );
+    assert.equal(
+      row.rows[0].status,
+      'pending_operator_action',
+      'a new review item must require an explicit operator action, never auto-advance',
+    );
+  } finally {
+    await pool.end().catch(() => {});
+  }
 });

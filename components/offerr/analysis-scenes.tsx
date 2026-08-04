@@ -269,9 +269,9 @@ function NeuralCube() {
   const draw = useCallback((ctx: CanvasRenderingContext2D, w: number, h: number, t: number) => {
     const cx = w / 2, cy = h / 2, rX = t * 0.2, rY = t * 0.3
     const p3d = (x: number, y: number, z: number) => {
-      let rx = x * Math.cos(rY) - z * Math.sin(rY)
+      const rx = x * Math.cos(rY) - z * Math.sin(rY)
       let rz = x * Math.sin(rY) + z * Math.cos(rY)
-      let ry = y * Math.cos(rX) - rz * Math.sin(rX)
+      const ry = y * Math.cos(rX) - rz * Math.sin(rX)
       rz = y * Math.sin(rX) + rz * Math.cos(rX)
       const sc = 240 / (240 + rz)
       return { x: cx + rx * sc, y: cy + ry * sc, z: rz }
