@@ -246,7 +246,7 @@ prefix length through timing.
 
 ---
 
-## 7. Feature gates and kill switches — **IMPLEMENTED**
+## 7. Feature gates and kill switches — **IMPLEMENTED + TESTED**
 
 Four **independent** controls, all fail-closed, all defaulting off in production:
 
@@ -263,8 +263,32 @@ switched on — they are separate controls with separate owners.
 A denied visitor is never told **which** gate refused, so the configuration cannot
 be probed.
 
-Still required: an explicit **operational handoff availability** switch, separate
-from the four above.
+### The four independent server-side gates — **IMPLEMENTED**
+
+| Variable | Controls | Default |
+|---|---|---|
+| `OFFERR_PUBLIC_INTAKE_ENABLED` | public intake availability | false |
+| `OFFERR_BACKEND_EVALUATION_ENABLED` | backend evaluation availability | false |
+| `OFFERR_CANARY_ACCESS_ENABLED` | canary admission | false |
+| `OFFERR_REVIEW_HANDOFF_ENABLED` | operational review handoff | false |
+
+`gateMatrix()` resolves all four server-side and returns all-false on a
+production deployment regardless of configuration.
+
+`tests/offerr/gates.test.ts` (8 tests) proves the property that actually matters
+— **orthogonality**, not switchability:
+
+- turning any ONE gate on opens no other (full 4×4 matrix);
+- the backend/engine gate does not expose public intake;
+- public intake does not bypass canary access;
+- review handoff stays closed even with every other gate open;
+- production forces all four false whatever is configured;
+- only the literal `"true"` opens a gate — `TRUE`, `1`, `yes`, `on`, `trueish`
+  and empty all read as closed, so a half-deployed value fails closed;
+- no gate is a `NEXT_PUBLIC_` variable. A client-readable flag is a display
+  hint, not a control: the browser can lie about it.
+
+Verified absent from the built client bundle.
 
 ---
 
@@ -314,9 +338,26 @@ and independently unset `OFFERR_PREVIEW_ACCESS_TOKEN` to deny all admission.
 | Supabase preview branch on the **production** project, live and billing for ~19h | **deleted** |
 | Response egress: allowlist projection + fail-closed denylist scan at any depth | already implemented, tested |
 
-Still outstanding: CSP and security headers beyond the `X-Robots-Tag` /
-`Referrer-Policy` / `Cache-Control` set in `vercel.json`; dependency vulnerability
-scan; RSC payload review.
+### Security headers — **IMPLEMENTED, NOT YET VERIFIED ON A DEPLOYMENT**
+
+Applied to `/(.*)` in `vercel.json`: `Content-Security-Policy`,
+`X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`,
+`Permissions-Policy`, `Strict-Transport-Security` (2y, preload),
+`Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`,
+`X-DNS-Prefetch-Control`.
+
+CSP is strict everywhere it can be: `default-src 'self'`, `connect-src 'self'`,
+`frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`,
+`form-action 'self'`.
+
+> **`script-src` and `style-src` still carry `'unsafe-inline'.`** Next injects
+> inline bootstrap scripts, and removing it requires nonce-based CSP through the
+> proxy layer. That change cannot be made safely without testing on a real
+> deployment — shipping it blind would white-screen the app. **Headers have NOT
+> been verified against a deployment**; that is required before canary, and
+> nonce-based hardening is the follow-up.
+
+Still outstanding: dependency vulnerability scan; RSC payload review.
 
 ---
 
