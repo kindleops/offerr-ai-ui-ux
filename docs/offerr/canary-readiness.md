@@ -30,55 +30,83 @@ repository cannot read or set it.
 
 ---
 
-## 1. Infrastructure ownership — **BLOCKED**
+## 1. Infrastructure ownership — **DECIDED**
 
-The current posture contradicts the standalone-product requirement:
+OfferrAI is a standalone public website, product, repository, Vercel project and
+teal/cyan-green brand. Its **backend application state deliberately lives inside
+the shared rei-automation data platform.**
 
-| Resource | Current owner | Problem |
-|---|---|---|
-| Vercel project `offerr-ai` | `real-estate-automation` team | Not a standalone OfferrAI scope. |
-| Durable preview state | `offerr_preview` schema inside the **production** `real-estate-automation` Supabase project (`lcppdrmrdfblstpcbgpf`) | OfferrAI's long-term public-session state must not live inside the backend's production database. |
+This is an intentional architecture decision, not a compromise: the two systems
+share the property, comp, evaluation, acquisition and eventual LeadCommand
+ecosystem, so a second database would duplicate exactly what must stay canonical
+in one place.
 
-The preview branch (`vmwgvdpbwpzmbquwnfgr`, `offerr-ai-pr-1-integration`) was a
-branch **of the production project**. It has been deleted.
+| | |
+|---|---|
+| Supabase project | `real-estate-automation` |
+| Project ref | `lcppdrmrdfblstpcbgpf` |
+| Organization | REI Automation (existing) |
+| Schema | `offerr_app` (private, new) |
+| Migration owner | **`rei-automation`** — that repository owns the shared schema |
+| Adapters and UI | `offerr-ai-ui-ux` |
 
-### Decision required before canary
+**No new Supabase project or organization was created.** There is therefore **no
+new fixed Supabase charge**. The only incremental cost is marginal database usage
+inside the existing project: a handful of small rows per seller session, all
+short-TTL and swept. PITR and backup configuration were **not** changed.
 
-Recommended: **an OfferrAI-owned Supabase/PostgreSQL project**, separate account
-or at minimum a separate project, holding only the `offerr_preview` schema.
+### Explicitly NOT created
 
-Rationale over the alternatives:
+no separate OfferrAI organization · no separate OfferrAI project · no duplicated
+property or comp tables · no duplicated buyer or acquisition intelligence · no
+independent evaluation database.
 
-- The schema, functions and atomicity guarantees already exist and are tested
-  (`supabase/offerr-preview-state.sql`). Moving to Redis/KV would mean rewriting
-  the atomic reservation semantics and adding a second durable store for results.
-- The access posture is already strong: the schema is deliberately **not** exposed
-  through PostgREST, so the only path in is a server-side connection holding the
-  database credential. That is stronger than "exposed but policy-restricted".
+`offerr_app` is not a second acquisition database. It holds only what a public
+web surface needs to be correct across serverless instances.
 
-**Expected cost:** a Supabase Micro instance is ~$10/month plus usage. This has
-**not** been provisioned — doing so is a paid resource decision that belongs to
-the account owner, and the mission's instruction was to record expected cost and
-confirm necessity before creating paid infrastructure.
+### Objects
 
-### What the store must support (already implemented against the current schema)
+`sessions` · `seller_results` · `idempotency_reservations` ·
+`rate_limit_buckets` · `property_cooldowns` · `consent_records` ·
+`canary_access` · `review_items`
+
+Schema:
+`rei-automation/apps/api/supabase/migrations/20260804120000_offerr_app_public_state.sql`
+Verification:
+`rei-automation/apps/api/scripts/offerr/offerr-app-schema-verify.sql`
+
+### Security posture — **IMPLEMENTED, NOT YET VERIFIED AGAINST THE DATABASE**
+
+- `offerr_app` is never added to PostgREST's exposed schema list, so it is not
+  reachable over REST by anyone with any key. That beats "exposed but
+  policy-restricted", where one policy mistake is a breach.
+- RLS enabled on every table as an independent second layer.
+- `anon` and `authenticated` revoked at schema, table and function level;
+  default privileges carry the same posture to anything added later.
+- `service_role` holds exactly what the adapter needs, and the credential is
+  server-only.
+- Raw session tokens, result handles, client IPs and full addresses are **never
+  stored** — the SQL functions hash them, so the database holds no credential
+  and no address.
+- No foreign key from `offerr_app` reaches outside it, so the public surface has
+  no path to mutate canonical acquisition tables.
+
+### What the store supports
 
 rate-limit counters · per-session limits · per-property cooldowns · atomic
 idempotency reservations · in-flight leases · durable seller-safe results ·
 expiration and cleanup · session ownership · cross-instance consistency · safe
-retry · audit metadata without raw PII.
+retry · versioned consent · canary admission · operator review queue.
+
+Every race-sensitive mutation is a single statement inside a SQL function. There
+is no read-then-write in the adapter.
 
 ### What it must never store
 
 internal acquisition payloads · raw comp rows · buyer identities · owner
-enrichment · backend secrets · full seller addresses in rate-limit keys ·
-sensitive seller facts in logs.
-
-Fail-closed is implemented: if a durable store is required (any deployed
-environment) and unreachable, callers are refused. A rate limiter that silently
-stops limiting when its store is down removes the signal that anything is wrong.
-
----
+enrichment · backend secrets · raw session tokens · full seller addresses in
+rate-limit keys · internal property ids · underwriting output · MAO ·
+assignment-fee target.
 
 ## 2. Backend authentication — **PARTIALLY IMPLEMENTED**
 

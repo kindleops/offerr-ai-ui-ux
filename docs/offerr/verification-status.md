@@ -8,7 +8,7 @@ Recorded honestly. A gate is listed as passed **only** if it actually executed.
 |---|---|---|
 | Lint | `pnpm lint` (`eslint .`) | **PASS** — 0 errors, 4 warnings |
 | Typecheck | `pnpm typecheck` (`tsc --noEmit`) | **PASS** — exit 0 |
-| Unit + contract tests | `pnpm test:offerr` | **PASS** — 86 tests, 80 pass, 0 fail, 6 skipped |
+| Unit + contract tests | `pnpm test:offerr` | **PASS** — 91 tests, 80 pass, 0 fail, 11 skipped |
 | Production build | `pnpm build` | **PASS** — now with TypeScript validation enabled |
 | Client-bundle secret scan | grep over `.next/static` | **PASS** — 0 occurrences of 8 secret patterns |
 | Custom boundary rules | probe file | **PASS** — both rules fire; no false positive on `session-constants.ts` |
@@ -24,25 +24,28 @@ unnecessary *widening*. They exist because the values flow into typed props that
 from the seller-facts contract — deliberately deferred rather than papered over
 with a suppression comment.
 
-### The 6 skipped tests
+### The 11 skipped tests — durable-store integration
 
-All six are the Postgres durable-store integration tests:
+All eleven require `OFFERR_APP_DATABASE_URL` and target the new `offerr_app`
+schema. Six are the original cross-instance proofs; five are new (result expiry,
+cooldown, versioned consent, anon/authenticated privilege denial, review-item
+creation with no side effect).
 
-```
-a rate limit admits exactly its allowance across concurrent instances
-every concurrent call is counted — no lost updates
-concurrent submissions on different instances elect ONE winner
-a completed result is readable only by its own session
-a released reservation frees the key for a genuine retry
-an expired lease is reclaimable so a dead instance cannot wedge a key
-```
-
-They skip when `OFFERR_PREVIEW_STATE_DATABASE_URL` is unset. It is unset because
-the Supabase preview branch was deleted as authorized cleanup.
-
-> **These are exactly the tests that prove cross-instance correctness.** They have
-> not run on this branch. They must run against the final OfferrAI-owned durable
-> store before any canary.
+> **BLOCKED ON A CREDENTIAL.** The migration could not be applied and the tests
+> could not run, because the `SUPABASE_DB_URL` stored in
+> `rei-automation/apps/api/.env.local` fails authentication:
+>
+> ```
+> FATAL: password authentication failed for user "postgres"
+> ```
+>
+> The host resolves correctly (`db.lcppdrmrdfblstpcbgpf.supabase.co`), so this is
+> a rotated password, not a connectivity or quoting problem. Verified by sourcing
+> the env file directly rather than parsing it.
+>
+> **These are exactly the tests that prove cross-instance correctness. They have
+> not run. Nothing about atomicity, single-flight election, lease takeover or
+> cross-session denial is verified against a real database.**
 
 ## NOT performed
 

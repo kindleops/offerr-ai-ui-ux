@@ -14,11 +14,13 @@
  *
  * Every one of those is now a row in Postgres, and every mutation that has to be
  * race-safe is a single atomic statement inside a SQL function (see
- * `supabase/offerr-preview-state.sql`). No read-then-write in application code.
+ * `rei-automation:
+ * apps/api/supabase/migrations/20260804120000_offerr_app_public_state.sql).
+ * No read-then-write in application code.
  *
  * WHY DIRECT POSTGRES RATHER THAN THE SUPABASE REST API
  * -----------------------------------------------------
- * The state lives in its own `offerr_preview` schema which is deliberately NOT
+ * The state lives in its own `offerr_app` schema which is deliberately NOT
  * exposed through PostgREST. Nothing about this surface is reachable over the
  * public REST API at all, by anyone, with any key — the only path in is a
  * server-side connection holding the database credential. That is a stronger
@@ -103,7 +105,7 @@ function getPool(connectionString: string): Pool {
     // an attacker presented.
     ssl: {
       rejectUnauthorized: true,
-      ca: String(process.env.OFFERR_PREVIEW_STATE_CA_CERT ?? '').trim() || SUPABASE_ROOT_2021_CA,
+      ca: String(process.env.OFFERR_APP_DATABASE_CA_CERT ?? '').trim() || SUPABASE_ROOT_2021_CA,
     },
   });
   pool.on('error', () => {
@@ -139,10 +141,25 @@ class PostgresStore implements PreviewStore {
     }
   }
 
+  /**
+   * Callers pass a composite `action:scope:subject` key. The schema stores those
+   * as explicit dimensions so a bucket is attributable during an incident
+   * without reconstructing key formats, and so a raw IP or address can never be
+   * mistaken for a subject — the SQL function hashes whatever it is given.
+   */
+  private static splitKey(key: string): { scope: string; subject: string; action: string } {
+    const [action = 'unknown', scopeAbbrev = 'session', ...rest] = key.split(':');
+    const subject = rest.join(':') || 'unknown';
+    const scope =
+      scopeAbbrev === 'ip' ? 'ip' : scopeAbbrev === 'property' ? 'property' : 'session';
+    return { scope, subject, action };
+  }
+
   async consume(key: string, limit: number, windowMs: number): Promise<RateDecision> {
+    const { scope, subject, action } = PostgresStore.splitKey(key);
     const rows = await this.query<{ allowed: boolean; remaining: number; retry_after_seconds: number }>(
-      'SELECT allowed, remaining, retry_after_seconds FROM offerr_preview.rate_consume($1, $2, $3)',
-      [key, limit, windowMs],
+      'SELECT allowed, remaining, retry_after_seconds FROM offerr_app.rate_consume($1, $2, $3, $4, $5)',
+      [scope, subject, action, limit, windowMs],
     );
     const row = rows[0];
     if (!row) throw new StoreUnavailableError('rate_consume returned no row');
@@ -155,7 +172,7 @@ class PostgresStore implements PreviewStore {
 
   async cooldownCheck(key: string): Promise<RateDecision> {
     const rows = await this.query<{ allowed: boolean; retry_after_seconds: number }>(
-      'SELECT allowed, retry_after_seconds FROM offerr_preview.cooldown_check($1)',
+      'SELECT allowed, retry_after_seconds FROM offerr_app.cooldown_check($1)',
       [key],
     );
     const row = rows[0];
@@ -164,7 +181,7 @@ class PostgresStore implements PreviewStore {
   }
 
   async cooldownMark(key: string, ms: number): Promise<void> {
-    await this.query('SELECT offerr_preview.cooldown_mark($1, $2)', [key, ms]);
+    await this.query('SELECT offerr_app.cooldown_mark($1, $2)', [key, ms]);
   }
 
   async reserve(
@@ -174,50 +191,57 @@ class PostgresStore implements PreviewStore {
     ttlMs: number,
     leaseMs: number,
   ): Promise<Reservation> {
-    const rows = await this.query<{ won: boolean; state: string; result_id: string | null; result: SellerSafeResult | null }>(
-      'SELECT won, state, result_id, result FROM offerr_preview.reserve($1, $2, $3, $4, $5)',
+    // The session row must exist before a reservation can reference it. Doing
+    // this here rather than at every call site means a caller cannot forget and
+    // silently lose its single-flight guarantee.
+    await this.query('SELECT id FROM offerr_app.session_touch($1, $2, NULL)', [sid, ttlMs]);
+
+    const rows = await this.query<{ won: boolean; state: string; result_handle: string | null; result: SellerSafeResult | null }>(
+      'SELECT won, state, result_handle, result FROM offerr_app.reserve($1, $2, $3, $4, $5)',
       [idempotencyKey, sid, resultId, ttlMs, leaseMs],
     );
     const row = rows[0];
     if (!row) throw new StoreUnavailableError('reserve returned no row');
-    if (row.won) return { state: 'won', resultId: row.result_id, result: null };
+    if (row.won) return { state: 'won', resultId, result: null };
     return {
       state: (row.state === 'ready' ? 'ready' : row.state === 'pending' ? 'pending' : 'gone') as ReservationState,
-      resultId: row.result_id,
+      resultId: row.result_handle,
       result: row.result,
     };
   }
 
   async complete(idempotencyKey: string, resultId: string, result: SellerSafeResult, ttlMs: number): Promise<void> {
-    await this.query('SELECT offerr_preview.complete($1, $2, $3::jsonb, $4)', [
+    await this.query('SELECT offerr_app.complete($1, $2, $3, $4::jsonb, $5, $6)', [
       idempotencyKey,
       resultId,
+      String((result as { outcome?: unknown })?.outcome ?? 'unknown'),
       JSON.stringify(result),
+      String((result as { supportCode?: unknown })?.supportCode ?? '') || null,
       ttlMs,
     ]);
   }
 
   async release(idempotencyKey: string): Promise<void> {
-    await this.query('SELECT offerr_preview.release($1)', [idempotencyKey]);
+    await this.query('SELECT offerr_app.release($1)', [idempotencyKey]);
   }
 
   async findByKey(idempotencyKey: string, sid: string): Promise<Reservation> {
-    const rows = await this.query<{ state: string; result_id: string | null; result: SellerSafeResult | null }>(
-      'SELECT state, result_id, result FROM offerr_preview.find_by_key($1, $2)',
+    const rows = await this.query<{ state: string; result: SellerSafeResult | null }>(
+      'SELECT state, result FROM offerr_app.find_by_key($1, $2)',
       [idempotencyKey, sid],
     );
     const row = rows[0];
     if (!row || row.state === 'none') return { state: 'gone', resultId: null, result: null };
     return {
       state: (row.state === 'ready' ? 'ready' : 'pending') as ReservationState,
-      resultId: row.result_id,
+      resultId: null,
       result: row.result,
     };
   }
 
   async readResult(resultId: string, sid: string): Promise<ReadOutcome> {
     const rows = await this.query<{ status: string; result: SellerSafeResult | null; expires_at: string | null }>(
-      'SELECT status, result, expires_at FROM offerr_preview.read_result($1, $2)',
+      'SELECT status, result, expires_at FROM offerr_app.read_result($1, $2)',
       [resultId, sid],
     );
     const row = rows[0];
@@ -337,7 +361,7 @@ class MemoryStore implements PreviewStore {
 // ── Selection ───────────────────────────────────────────────────────────────
 
 function connectionString(): string {
-  return String(process.env.OFFERR_PREVIEW_STATE_DATABASE_URL ?? '').trim();
+  return String(process.env.OFFERR_APP_DATABASE_URL ?? '').trim();
 }
 
 /**
@@ -360,7 +384,7 @@ export function getPreviewStore(): PreviewStore {
   }
   if (durableStoreRequired()) {
     // Fail closed rather than silently degrade to per-instance counters.
-    throw new StoreUnavailableError('OFFERR_PREVIEW_STATE_DATABASE_URL is not configured');
+    throw new StoreUnavailableError('OFFERR_APP_DATABASE_URL is not configured');
   }
   instance = new MemoryStore();
   return instance;
