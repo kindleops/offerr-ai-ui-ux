@@ -93,7 +93,7 @@ re-verified on this branch.
 | LeadCommand lifecycle | none created |
 | Exchange / marketplace publication | none |
 | Reivesti | untouched |
-| `rei-automation` | **read-only** — inspected to mirror the contract; no commits, no branches, no changes |
+| `rei-automation` | **schema-only change** — branch `feat/offerr-app-public-state` adds the `offerr_app` migration and its verification script. No application code, no acquisition table, no existing migration touched. Migration **not yet applied** to any database. |
 
 ## Infrastructure changes made
 
